@@ -1,6 +1,6 @@
-import SwiftUI
-import Combine
 import AppKit
+import Combine
+import SwiftUI
 import UniformTypeIdentifiers
 import os
 
@@ -11,11 +11,11 @@ struct ClipboardDataType: Identifiable, Hashable {
     let uti: String
     let data: Data
     let description: String
-    
+
     var isPreviewable: Bool {
         return canRenderAsText || canRenderAsImage
     }
-    
+
     var canRenderAsText: Bool {
         let textTypes = [
             UTType.plainText.identifier,
@@ -23,11 +23,11 @@ struct ClipboardDataType: Identifiable, Hashable {
             UTType.html.identifier,
             "public.utf8-plain-text",
             "public.rtf",
-            "public.html"
+            "public.html",
         ]
         return textTypes.contains(uti)
     }
-    
+
     var canRenderAsImage: Bool {
         let imageTypes = [
             UTType.png.identifier,
@@ -38,11 +38,11 @@ struct ClipboardDataType: Identifiable, Hashable {
             "public.png",
             "public.jpeg",
             "public.tiff",
-            "com.adobe.pdf"
+            "com.adobe.pdf",
         ]
         return imageTypes.contains(uti)
     }
-    
+
     var typeName: String {
         switch uti {
         case UTType.plainText.identifier, "public.utf8-plain-text":
@@ -72,16 +72,22 @@ struct ClipboardDataType: Identifiable, Hashable {
             return uti
         }
     }
-    
+
     func getTextRepresentation() -> String? {
         if uti == UTType.plainText.identifier || uti == "public.utf8-plain-text" {
             return String(data: data, encoding: .utf8)
         } else if uti == UTType.rtf.identifier || uti == "public.rtf" {
-            if let attributedString = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) {
+            if let attributedString = try? NSAttributedString(
+                data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil)
+            {
                 return attributedString.string
             }
         } else if uti == UTType.html.identifier || uti == "public.html" {
-            if let attributedString = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.html], documentAttributes: nil) {
+            if let attributedString = try? NSAttributedString(
+                data: data, options: [.documentType: NSAttributedString.DocumentType.html],
+                documentAttributes: nil)
+            {
                 return attributedString.string
             }
         } else if uti == UTType.url.identifier || uti == "public.url" {
@@ -89,12 +95,12 @@ struct ClipboardDataType: Identifiable, Hashable {
         }
         return nil
     }
-    
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(uti)
     }
-    
+
     static func == (lhs: ClipboardDataType, rhs: ClipboardDataType) -> Bool {
         return lhs.id == rhs.id && lhs.uti == rhs.uti
     }
@@ -105,7 +111,7 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let timestamp: Date
     let changeCount: Int
     var dataTypes: [ClipboardDataType]
-    
+
     var textRepresentation: String {
         for dataType in dataTypes {
             if let text = dataType.getTextRepresentation() {
@@ -114,11 +120,11 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
         }
         return "No text representation available"
     }
-    
+
     var hasImageRepresentation: Bool {
         return dataTypes.contains { $0.canRenderAsImage }
     }
-    
+
     static func == (lhs: ClipboardHistoryItem, rhs: ClipboardHistoryItem) -> Bool {
         return lhs.id == rhs.id
     }
@@ -132,11 +138,12 @@ class ClipboardMonitor: ObservableObject {
     @Published var selectedType: ClipboardDataType?
     @Published var selectedHistoryItem: ClipboardHistoryItem?
     @Published var currentItemID: UUID?
-    
+
     private var timer: Timer?
     private var lastChangeCount: Int = 0
-    private let logger = Logger(subsystem: "com.scottopell.spaperclip", category: "ClipboardMonitor")
-    
+    private let logger = Logger(
+        subsystem: "com.scottopell.spaperclip", category: "ClipboardMonitor")
+
     private let knownTypes = [
         "public.utf8-plain-text",
         "public.rtf",
@@ -147,67 +154,69 @@ class ClipboardMonitor: ObservableObject {
         "com.adobe.pdf",
         "public.url",
         "public.file-url",
-        "com.apple.finder.drag.clipping"
+        "com.apple.finder.drag.clipping",
     ]
-    
+
     init() {
         logger.info("Application starting")
-        
+
         let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
-        
+
         startMonitoring()
         updateFromClipboard()
-        
+
         logger.info("Initialization complete")
     }
-    
+
     func startMonitoring() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
-        
+
         logger.info("Clipboard monitoring started")
     }
-    
+
     func stopMonitoring() {
         timer?.invalidate()
         timer = nil
         logger.info("Clipboard monitoring stopped")
     }
-    
+
     func clearHistory() {
         history.removeAll()
     }
-    
+
     private func checkClipboard() {
         let pasteboard = NSPasteboard.general
         let currentChangeCount = pasteboard.changeCount
-        
+
         if currentChangeCount != lastChangeCount {
             logger.info("Clipboard changed: \(self.lastChangeCount) -> \(currentChangeCount)")
             lastChangeCount = currentChangeCount
             updateFromClipboard()
         }
     }
-    
+
     private func updateFromClipboard() {
         let pasteboard = NSPasteboard.general
-        
+
         guard let availableTypes = pasteboard.types else {
             return
         }
-        
+
         var dataTypes: [ClipboardDataType] = []
-        
+
         for type in knownTypes {
             if availableTypes.contains(NSPasteboard.PasteboardType(type)),
-               let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type)) {
-                
-                let description = type == "public.utf8-plain-text"
+                let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type))
+            {
+
+                let description =
+                    type == "public.utf8-plain-text"
                     ? (String(data: data, encoding: .utf8) ?? "Unknown text data")
                     : "Binary data (\(data.count) bytes)"
-                
+
                 let dataType = ClipboardDataType(
                     uti: type,
                     data: data,
@@ -216,13 +225,14 @@ class ClipboardMonitor: ObservableObject {
                 dataTypes.append(dataType)
             }
         }
-        
+
         // Check for any other types
         for type in availableTypes {
             let typeString = type.rawValue
             if !knownTypes.contains(typeString),
-               let data = pasteboard.data(forType: type) {
-                
+                let data = pasteboard.data(forType: type)
+            {
+
                 let dataType = ClipboardDataType(
                     uti: typeString,
                     data: data,
@@ -231,30 +241,30 @@ class ClipboardMonitor: ObservableObject {
                 dataTypes.append(dataType)
             }
         }
-        
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            
+
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 changeCount: pasteboard.changeCount,
                 dataTypes: dataTypes
             )
-            
+
             // Update current item reference
             self.currentItem = newItem
             // Set the current item ID
             self.currentItemID = newItem.id
-            
+
             if !dataTypes.isEmpty {
                 // Insert at beginning (most recent first)
                 self.history.insert(newItem, at: 0)
-                
+
                 // Limit history size
                 if self.history.count > 100 {
                     self.history = Array(self.history.prefix(100))
                 }
-                
+
                 // Set initially selected type to text if available
                 if let textType = dataTypes.first(where: { $0.canRenderAsText }) {
                     self.selectedType = textType
@@ -262,11 +272,11 @@ class ClipboardMonitor: ObservableObject {
                     self.selectedType = dataTypes.first
                 }
             }
-            
+
             self.logger.info("UI updated with new clipboard content: \(dataTypes.count) data types")
         }
     }
-    
+
     deinit {
         stopMonitoring()
     }
@@ -276,9 +286,9 @@ class ClipboardMonitor: ObservableObject {
 
 struct ContentTypePicker: View {
     @ObservedObject var monitor: ClipboardMonitor
-    
+
     let dataTypes: [ClipboardDataType]
-    
+
     var body: some View {
         Picker("Content Type", selection: $monitor.selectedType) {
             ForEach(dataTypes, id: \.self) { dataType in
@@ -293,7 +303,7 @@ struct ContentTypePicker: View {
 
 struct ClipboardContentPreview: View {
     let dataType: ClipboardDataType?
-    
+
     var body: some View {
         if let dataType = dataType {
             VStack {
@@ -336,20 +346,20 @@ struct ClipboardContentPreview: View {
 
 struct CurrentClipboardView: View {
     @ObservedObject var monitor: ClipboardMonitor
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Current Clipboard Content:")
                     .font(.headline)
-                
+
                 Spacer()
-                
+
                 if let item = monitor.currentItem, !item.dataTypes.isEmpty {
                     ContentTypePicker(monitor: monitor, dataTypes: item.dataTypes)
                 }
             }
-            
+
             if let item = monitor.currentItem {
                 ClipboardContentPreview(dataType: monitor.selectedType)
                     .frame(maxHeight: 200)
@@ -369,7 +379,6 @@ struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     @ObservedObject var monitor: ClipboardMonitor
 
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header with timestamp and indicators
@@ -378,9 +387,9 @@ struct HistoryItemRow: View {
                 Text(formatDate(item.timestamp))
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundColor(.secondary)
-                
+
                 Spacer()
-                
+
                 // Type indicators
                 HStack(spacing: 6) {
                     if monitor.currentItemID == item.id {
@@ -389,27 +398,27 @@ struct HistoryItemRow: View {
                             .foregroundColor(.green)
                             .help("Current clipboard content")
                     }
-                    
+
                     if item.dataTypes.contains(where: { $0.canRenderAsText }) {
                         Image(systemName: "doc.text")
                             .foregroundColor(.blue)
                     }
-                    
+
                     if item.dataTypes.contains(where: { $0.canRenderAsImage }) {
                         Image(systemName: "photo")
                             .foregroundColor(.green)
                     }
-                    
+
                     if item.dataTypes.contains(where: { $0.uti.contains("url") }) {
                         Image(systemName: "link")
                             .foregroundColor(.purple)
                     }
                 }
             }
-            
+
             Divider()
                 .padding(.vertical, 2)
-            
+
             // Content preview
             Text(truncateString(item.textRepresentation))
                 .lineLimit(2)
@@ -422,18 +431,16 @@ struct HistoryItemRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(
-                    monitor.currentItemID == item.id ?
-                        Color.green.opacity(0.5) :
-                        (monitor.selectedHistoryItem?.id == item.id ?
-                            Color.accentColor.opacity(0.8) :
-                            Color.gray.opacity(0.3)),
+                    monitor.currentItemID == item.id
+                        ? Color.green.opacity(0.5)
+                        : (monitor.selectedHistoryItem?.id == item.id
+                            ? Color.accentColor.opacity(0.8) : Color.gray.opacity(0.3)),
                     lineWidth: monitor.selectedHistoryItem?.id == item.id ? 2 : 1
                 )
         )
         .shadow(
-            color: monitor.selectedHistoryItem?.id == item.id ?
-                Color.accentColor.opacity(0.3) :
-                Color.clear,
+            color: monitor.selectedHistoryItem?.id == item.id
+                ? Color.accentColor.opacity(0.3) : Color.clear,
             radius: 4
         )
         .padding(.horizontal, 4)
@@ -445,38 +452,38 @@ struct HistoryItemRow: View {
                     copyToClipboard(dataType)
                 }
             }
-            
+
             Divider()
-            
+
             Button("Copy All Data Types") {
                 copyAllDataTypes(item)
             }
         }
     }
-    
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
-    
+
     private func truncateString(_ str: String) -> String {
         if str.count > 100 {
             return String(str.prefix(100)) + "..."
         }
         return str
     }
-    
+
     private func copyToClipboard(_ dataType: ClipboardDataType) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
     }
-    
+
     private func copyAllDataTypes(_ item: ClipboardHistoryItem) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        
+
         for dataType in item.dataTypes {
             pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
         }
@@ -490,7 +497,7 @@ struct HistoryListView: View {
             Text("Clipboard History")
                 .font(.headline)
                 .padding(.bottom, 4)
-            
+
             if monitor.history.isEmpty {
                 Text("No clipboard history yet. Copy something!")
                     .italic()
@@ -506,7 +513,9 @@ struct HistoryListView: View {
                                 .onTapGesture {
                                     monitor.selectedHistoryItem = item
                                     // Update the selected type when selecting a history item
-                                    if let textType = item.dataTypes.first(where: { $0.canRenderAsText }) {
+                                    if let textType = item.dataTypes.first(where: {
+                                        $0.canRenderAsText
+                                    }) {
                                         monitor.selectedType = textType
                                     } else {
                                         monitor.selectedType = item.dataTypes.first
@@ -523,165 +532,207 @@ struct HistoryListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
-
     let item: ClipboardHistoryItem?
-    @State private var selectedTab = 0
-    
+    @State private var selectedTypeIndex = 0
+
     var body: some View {
         if let item = item {
-            VStack(spacing: 0) {
-                // Header with type selector
+            VStack(spacing: 8) {
+                // Header
                 HStack {
                     if monitor.currentItemID == item.id {
-                        Label("Current Clipboard Content", systemImage: "circle.fill")
+                        Label("Current Clipboard", systemImage: "circle.fill")
                             .foregroundColor(.green)
                     } else {
-                        Text("Clipboard Item Details")
+                        Text("Clipboard Item")
                     }
-                    
+
+                    Text(formatDate(item.timestamp))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 8)
+
                     Spacer()
-                    
-                    if let item = monitor.currentItem, !item.dataTypes.isEmpty {
-                        ContentTypePicker(monitor: monitor, dataTypes: item.dataTypes)
-                    }                }
+                }
                 .font(.headline)
                 .padding([.horizontal, .top])
-                
-                // Tab selector
-                Picker("View", selection: $selectedTab) {
-                    Text("Preview").tag(0)
-                    Text("Details").tag(1)
-                    Text("Actions").tag(2)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.top, 8)
-                
-                Divider()
-                    .padding(.top, 8)
-                
-                // Tab content
-                TabView(selection: $selectedTab) {
-                    // Preview Tab
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            if let dataType = monitor.selectedType {
-                                ClipboardContentPreview(dataType: dataType)
-                                    .frame(minHeight: 300)
-                            } else {
-                                Text("No content type selected")
-                                    .foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                            }
-                        }
-                        .padding()
-                    }
-                    .tag(0)
-                    
-                    // Details Tab
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            // Metadata section
-                            GroupBox("Metadata") {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    DetailRow(label: "Timestamp", value: formatDate(item.timestamp))
-                                    DetailRow(label: "Available Types", value: "\(item.dataTypes.count)")
-                                    
-                                    if let dataType = monitor.selectedType {
-                                        Divider()
-                                        
-                                        DetailRow(label: "Type", value: dataType.typeName)
-                                        DetailRow(label: "UTI", value: dataType.uti)
-                                        DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
-                                    }
+
+                // Content type tabs
+                if !item.dataTypes.isEmpty {
+                    TabView(selection: $selectedTypeIndex) {
+                        ForEach(Array(item.dataTypes.enumerated()), id: \.element.id) {
+                            index, dataType in
+                            contentView(for: dataType)
+                                .tabItem {
+                                    Text(dataType.typeName)
+                                        .font(dataType.isPreviewable ? .headline : .body)
+                                        .foregroundColor(
+                                            dataType.isPreviewable ? .primary : .secondary)
                                 }
-                                .padding(.vertical, 8)
-                            }
-                            .padding(.horizontal)
+                                .tag(index)
                         }
-                        .padding(.vertical)
                     }
-                    .tag(1)
-                    
-                    // Actions Tab
-                    VStack(spacing: 20) {
-                        if let dataType = monitor.selectedType {
-                            Button(action: {
-                                copyToClipboard(dataType)
-                            }) {
-                                Label("Copy This Format (\(dataType.typeName))", systemImage: "doc.on.doc")
-                                    .frame(maxWidth: 300)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
+                    .onChange(of: selectedTypeIndex) { newIndex in
+                        if newIndex < item.dataTypes.count {
+                            monitor.selectedType = item.dataTypes[newIndex]
                         }
-                        
-                        Button(action: {
-                            copyAllDataTypes(item)
-                        }) {
-                            Label("Copy All Formats", systemImage: "rectangle.on.rectangle")
-                                .frame(maxWidth: 300)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        
-                        Spacer()
                     }
-                    .padding()
-                    .tag(2)
+                } else {
+                    Text("No content types available")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                // Set initial selected type
+                if let selectedType = monitor.selectedType,
+                    let index = item.dataTypes.firstIndex(where: { $0.id == selectedType.id })
+                {
+                    selectedTypeIndex = index
+                } else if !item.dataTypes.isEmpty {
+                    selectedTypeIndex = 0
+                    monitor.selectedType = item.dataTypes[0]
+                }
+            }
         } else {
             VStack {
                 Image(systemName: "clipboard")
                     .font(.system(size: 48))
                     .foregroundColor(.secondary)
                     .padding(.bottom)
-                
+
                 Text("Select a clipboard item to view details")
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
-    
+
+    @ViewBuilder
+    private func contentView(for dataType: ClipboardDataType) -> some View {
+        VStack {
+            // Preview section
+            Group {
+                if dataType.canRenderAsText, let text = dataType.getTextRepresentation() {
+                    ScrollView {
+                        Text(text)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    VStack {
+                        Text("Binary data: \(dataType.data.count) bytes")
+                            .foregroundColor(.secondary)
+                            .padding()
+
+                        // ASCII interpretation for small binary data
+                        if dataType.data.count < 1024 {
+                            Divider()
+
+                            VStack(alignment: .leading) {
+                                Text("ASCII Interpretation:")
+                                    .font(.subheadline)
+                                    .padding(.bottom, 4)
+
+                                ScrollView {
+                                    Text(asciiRepresentation(of: dataType.data))
+                                        .font(.system(.body, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+            .cornerRadius(6)
+
+            // Metadata section
+            VStack(alignment: .leading, spacing: 8) {
+                DetailRow(label: "Type", value: dataType.typeName)
+                DetailRow(label: "UTI", value: dataType.uti)
+                DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
+
+                Button(action: {
+                    copyToClipboard(dataType)
+                }) {
+                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 8)
+            }
+            .padding()
+            .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+            .cornerRadius(6)
+        }
+        .padding()
+    }
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
-    
+
     private func copyToClipboard(_ dataType: ClipboardDataType) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
     }
-    
-    private func copyAllDataTypes(_ item: ClipboardHistoryItem) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        
-        for dataType in item.dataTypes {
-            pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
+
+    private func asciiRepresentation(of data: Data) -> String {
+        var result = ""
+        let bytes = [UInt8](data)
+
+        for (index, byte) in bytes.enumerated() {
+            // Add newline every 16 bytes
+            if index % 16 == 0 && index > 0 {
+                result += "\n"
+            }
+
+            // Add readable character or dot for non-printable
+            if byte >= 32 && byte <= 126 {
+                result += String(format: "%c", byte)
+            } else {
+                result += "."
+            }
+
+            // Add space between characters
+            if index % 16 != 15 && index != bytes.count - 1 {
+                result += " "
+            }
         }
+
+        return result
     }
 }
-
 // Helper view for displaying detail rows
 struct DetailRow: View {
     let label: String
     let value: String
-    
+
     var body: some View {
         HStack(alignment: .top) {
             Text(label)
                 .frame(width: 120, alignment: .leading)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-            
+
             Text(value)
                 .font(.subheadline)
                 .textSelection(.enabled)
@@ -690,10 +741,9 @@ struct DetailRow: View {
     }
 }
 
-
 struct ContentView: View {
     @StateObject private var clipboardMonitor = ClipboardMonitor()
-    
+
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 10) {
