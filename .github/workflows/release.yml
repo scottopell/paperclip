@@ -19,7 +19,8 @@ jobs:
 
       - name: Build App
         run: |
-          xcodebuild -scheme spaperclip -configuration Release -derivedDataPath build
+          xcodebuild -scheme spaperclip -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO -derivedDataPath build
+
           cd build/Build/Products/Release
           zip -r spaperclip.zip spaperclip.app
 
