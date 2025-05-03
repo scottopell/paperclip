@@ -421,7 +421,20 @@ struct HistoryItemRow: View {
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(monitor.currentItemID == item.id ? Color.green.opacity(0.5) : Color.gray.opacity(0.3), lineWidth: 1)
+                .stroke(
+                    monitor.currentItemID == item.id ?
+                        Color.green.opacity(0.5) :
+                        (monitor.selectedHistoryItem?.id == item.id ?
+                            Color.accentColor.opacity(0.8) :
+                            Color.gray.opacity(0.3)),
+                    lineWidth: monitor.selectedHistoryItem?.id == item.id ? 2 : 1
+                )
+        )
+        .shadow(
+            color: monitor.selectedHistoryItem?.id == item.id ?
+                Color.accentColor.opacity(0.3) :
+                Color.clear,
+            radius: 4
         )
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
@@ -499,10 +512,6 @@ struct HistoryListView: View {
                                         monitor.selectedType = item.dataTypes.first
                                     }
                                 }
-                                .background(
-                                    monitor.selectedHistoryItem?.id == item.id ?
-                                        Color.accentColor.opacity(0.1) : Color.clear
-                                )
                         }
                     }
                     .padding(.vertical, 8)
