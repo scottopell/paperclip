@@ -105,7 +105,6 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let timestamp: Date
     let changeCount: Int
     var dataTypes: [ClipboardDataType]
-    var isLive: Bool = false
     
     var textRepresentation: String {
         for dataType in dataTypes {
@@ -132,6 +131,7 @@ class ClipboardMonitor: ObservableObject {
     @Published var history: [ClipboardHistoryItem] = []
     @Published var selectedType: ClipboardDataType?
     @Published var selectedHistoryItem: ClipboardHistoryItem?
+    @Published var currentItemID: UUID?
     
     private var timer: Timer?
     private var lastChangeCount: Int = 0
@@ -235,20 +235,16 @@ class ClipboardMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Update isLive flag on previous current item
-            if let oldCurrentIndex = self.history.firstIndex(where: { $0.isLive }) {
-                self.history[oldCurrentIndex].isLive = false
-            }
-            
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 changeCount: pasteboard.changeCount,
-                dataTypes: dataTypes,
-                isLive: true
+                dataTypes: dataTypes
             )
             
-            // Update current item
+            // Update current item reference
             self.currentItem = newItem
+            // Set the current item ID
+            self.currentItemID = newItem.id
             
             if !dataTypes.isEmpty {
                 // Insert at beginning (most recent first)
@@ -279,11 +275,12 @@ class ClipboardMonitor: ObservableObject {
 // MARK: - Views
 
 struct ContentTypePicker: View {
+    @ObservedObject var monitor: ClipboardMonitor
+    
     let dataTypes: [ClipboardDataType]
-    @Binding var selectedType: ClipboardDataType?
     
     var body: some View {
-        Picker("Content Type", selection: $selectedType) {
+        Picker("Content Type", selection: $monitor.selectedType) {
             ForEach(dataTypes, id: \.self) { dataType in
                 Text(dataType.typeName)
                     .tag(dataType as ClipboardDataType?)
@@ -338,8 +335,7 @@ struct ClipboardContentPreview: View {
 }
 
 struct CurrentClipboardView: View {
-    let item: ClipboardHistoryItem?
-    @Binding var selectedType: ClipboardDataType?
+    @ObservedObject var monitor: ClipboardMonitor
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -349,13 +345,13 @@ struct CurrentClipboardView: View {
                 
                 Spacer()
                 
-                if let item = item, !item.dataTypes.isEmpty {
-                    ContentTypePicker(dataTypes: item.dataTypes, selectedType: $selectedType)
+                if let item = monitor.currentItem, !item.dataTypes.isEmpty {
+                    ContentTypePicker(monitor: monitor, dataTypes: item.dataTypes)
                 }
             }
             
-            if let item = item {
-                ClipboardContentPreview(dataType: selectedType)
+            if let item = monitor.currentItem {
+                ClipboardContentPreview(dataType: monitor.selectedType)
                     .frame(maxHeight: 200)
             } else {
                 Text("Monitoring clipboard... Copy something!")
@@ -371,6 +367,8 @@ struct CurrentClipboardView: View {
 
 struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
+    @ObservedObject var monitor: ClipboardMonitor
+
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -385,7 +383,7 @@ struct HistoryItemRow: View {
                 
                 // Type indicators
                 HStack(spacing: 6) {
-                    if item.isLive {
+                    if monitor.currentItemID == item.id {
                         Label("Current", systemImage: "circle.fill")
                             .font(.caption)
                             .foregroundColor(.green)
@@ -423,7 +421,7 @@ struct HistoryItemRow: View {
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(item.isLive ? Color.green.opacity(0.5) : Color.gray.opacity(0.3), lineWidth: 1)
+                .stroke(monitor.currentItemID == item.id ? Color.green.opacity(0.5) : Color.gray.opacity(0.3), lineWidth: 1)
         )
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
@@ -472,17 +470,15 @@ struct HistoryItemRow: View {
     }
 }
 struct HistoryListView: View {
-    let history: [ClipboardHistoryItem]
-    @Binding var selectedHistoryItem: ClipboardHistoryItem?
-    @Binding var selectedType: ClipboardDataType?
-    
+    @ObservedObject var monitor: ClipboardMonitor
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Clipboard History")
                 .font(.headline)
                 .padding(.bottom, 4)
             
-            if history.isEmpty {
+            if monitor.history.isEmpty {
                 Text("No clipboard history yet. Copy something!")
                     .italic()
                     .foregroundColor(.secondary)
@@ -491,20 +487,20 @@ struct HistoryListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(history) { item in
-                            HistoryItemRow(item: item)
+                        ForEach(monitor.history) { item in
+                            HistoryItemRow(item: item, monitor: monitor)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedHistoryItem = item
+                                    monitor.selectedHistoryItem = item
                                     // Update the selected type when selecting a history item
                                     if let textType = item.dataTypes.first(where: { $0.canRenderAsText }) {
-                                        selectedType = textType
+                                        monitor.selectedType = textType
                                     } else {
-                                        selectedType = item.dataTypes.first
+                                        monitor.selectedType = item.dataTypes.first
                                     }
                                 }
                                 .background(
-                                    selectedHistoryItem?.id == item.id ?
+                                    monitor.selectedHistoryItem?.id == item.id ?
                                         Color.accentColor.opacity(0.1) : Color.clear
                                 )
                         }
@@ -519,8 +515,9 @@ struct HistoryListView: View {
     }
 }
 struct ClipboardDetailView: View {
+    @ObservedObject var monitor: ClipboardMonitor
+
     let item: ClipboardHistoryItem?
-    @Binding var selectedType: ClipboardDataType?
     @State private var selectedTab = 0
     
     var body: some View {
@@ -528,7 +525,7 @@ struct ClipboardDetailView: View {
             VStack(spacing: 0) {
                 // Header with type selector
                 HStack {
-                    if item.isLive {
+                    if monitor.currentItemID == item.id {
                         Label("Current Clipboard Content", systemImage: "circle.fill")
                             .foregroundColor(.green)
                     } else {
@@ -537,8 +534,9 @@ struct ClipboardDetailView: View {
                     
                     Spacer()
                     
-                    ContentTypePicker(dataTypes: item.dataTypes, selectedType: $selectedType)
-                }
+                    if let item = monitor.currentItem, !item.dataTypes.isEmpty {
+                        ContentTypePicker(monitor: monitor, dataTypes: item.dataTypes)
+                    }                }
                 .font(.headline)
                 .padding([.horizontal, .top])
                 
@@ -560,7 +558,7 @@ struct ClipboardDetailView: View {
                     // Preview Tab
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
-                            if let dataType = selectedType {
+                            if let dataType = monitor.selectedType {
                                 ClipboardContentPreview(dataType: dataType)
                                     .frame(minHeight: 300)
                             } else {
@@ -582,7 +580,7 @@ struct ClipboardDetailView: View {
                                     DetailRow(label: "Timestamp", value: formatDate(item.timestamp))
                                     DetailRow(label: "Available Types", value: "\(item.dataTypes.count)")
                                     
-                                    if let dataType = selectedType {
+                                    if let dataType = monitor.selectedType {
                                         Divider()
                                         
                                         DetailRow(label: "Type", value: dataType.typeName)
@@ -600,7 +598,7 @@ struct ClipboardDetailView: View {
                     
                     // Actions Tab
                     VStack(spacing: 20) {
-                        if let dataType = selectedType {
+                        if let dataType = monitor.selectedType {
                             Button(action: {
                                 copyToClipboard(dataType)
                             }) {
@@ -690,12 +688,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 10) {
-                // Clipboard history only
-                HistoryListView(
-                    history: clipboardMonitor.history,
-                    selectedHistoryItem: $clipboardMonitor.selectedHistoryItem,
-                    selectedType: $clipboardMonitor.selectedType
-                )
+                HistoryListView(monitor: clipboardMonitor)
             }
             .padding()
             .navigationTitle("spaperclip")
@@ -712,12 +705,35 @@ struct ContentView: View {
             }
         } detail: {
             ClipboardDetailView(
-                item: clipboardMonitor.selectedHistoryItem,
-                selectedType: $clipboardMonitor.selectedType
+                monitor: clipboardMonitor,
+                item: clipboardMonitor.selectedHistoryItem
             )
         }
         .onDisappear {
             clipboardMonitor.stopMonitoring()
+        }
+    }
+}
+// MARK: - App
+
+/// Main application structure
+@main
+struct ClipboardViewerApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .frame(minWidth: 600, minHeight: 400)
+        }
+        .windowStyle(.titleBar)
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
+        .commands {
+            CommandMenu("Clipboard") {
+                Button("Clear History") {
+                    // TODO
+                }
+                .keyboardShortcut("K", modifiers: [.command, .shift])
+            }
         }
     }
 }
