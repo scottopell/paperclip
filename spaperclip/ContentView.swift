@@ -535,6 +535,9 @@ struct HistoryListView: View {
 }
 
 
+import SwiftUI
+import PDFKit
+
 struct PDFImageView: NSViewRepresentable {
     let image: NSImage
     
@@ -688,19 +691,27 @@ struct ClipboardDetailView: View {
         }
     }
     
-    // Generate tab label for a group of data types
+    // Generate better, more specific tab labels for groups of data types
     private func getGroupTabLabel(_ types: [ClipboardDataType]) -> String {
         if types.count == 1 {
             return types[0].typeName
         }
         
-        // For multiple formats with same content, use a general label based on content type
-        if let textType = types.first(where: { $0.canRenderAsText }) {
-            return "Text (\(types.count) formats)"
-        } else if let imageType = types.first(where: { $0.canRenderAsImage }) {
-            return "Image (\(types.count) formats)"
+        // For multiple formats with same content, create more specific labels
+        if types.first(where: { $0.canRenderAsText }) != nil {
+            // For text types, include the specific formats
+            let formatNames = types.prefix(2).map { $0.typeName.replacingOccurrences(of: " Text", with: "") }
+            let additionalCount = types.count > 2 ? " +\(types.count - 2)" : ""
+            return "Text (\(formatNames.joined(separator: "/"))\(additionalCount))"
+        } else if types.first(where: { $0.canRenderAsImage }) != nil {
+            // For image types, include the specific formats
+            let formatNames = types.prefix(2).map { $0.typeName.replacingOccurrences(of: " Image", with: "") }
+            let additionalCount = types.count > 2 ? " +\(types.count - 2)" : ""
+            return "Image (\(formatNames.joined(separator: "/"))\(additionalCount))"
         } else {
-            return "Data (\(types.count) formats)"
+            // For other types, include the first type name
+            let mainType = types[0].typeName
+            return "Data (\(mainType) +\(types.count - 1))"
         }
     }
     
@@ -740,6 +751,7 @@ struct ClipboardDetailView: View {
                             .textSelection(.enabled)
                     }
                 } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
+                    // Use simplified PDFKit for image viewing with pinch-to-zoom
                     PDFImageView(image: nsImage)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -772,47 +784,11 @@ struct ClipboardDetailView: View {
             .background(Color(NSColor.textBackgroundColor).opacity(0.5))
             .cornerRadius(6)
             
-            // Metadata section
+            // Simplified metadata section - no copy buttons, no "All formats" section
             VStack(alignment: .leading, spacing: 8) {
                 DetailRow(label: "Type", value: dataType.typeName)
                 DetailRow(label: "UTI", value: dataType.uti)
                 DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
-                
-                // Available formats (if more than one)
-                if allFormats.count > 1 {
-                    HStack(alignment: .top) {
-                        Text("All Formats:")
-                            .frame(width: 120, alignment: .leading)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(allFormats) { format in
-                                Text("• \(format.typeName)")
-                                    .font(.subheadline)
-                            }
-                        }
-                    }
-                }
-                
-                Button(action: {
-                    copyToClipboard(dataType)
-                }) {
-                    Label("Copy as \(dataType.typeName)", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .padding(.top, 8)
-                
-                if allFormats.count > 1 {
-                    Button(action: {
-                        copyAllFormats(allFormats)
-                    }) {
-                        Label("Copy All Formats", systemImage: "rectangle.on.rectangle")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
             }
             .padding()
             .background(Color(NSColor.textBackgroundColor).opacity(0.3))
@@ -825,21 +801,6 @@ struct ClipboardDetailView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
-    }
-    
-    private func copyToClipboard(_ dataType: ClipboardDataType) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
-    }
-    
-    private func copyAllFormats(_ formats: [ClipboardDataType]) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        
-        for dataType in formats {
-            pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
-        }
     }
     
     private func asciiRepresentation(of data: Data) -> String {
@@ -867,7 +828,7 @@ struct ClipboardDetailView: View {
         
         return result
     }
-}// Helper view for displaying detail rows
+}
 struct DetailRow: View {
     let label: String
     let value: String
