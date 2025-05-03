@@ -6,6 +6,7 @@
 //
 
 // MARK: - App
+import SwiftUI
 
 /// Main application structure
 @main

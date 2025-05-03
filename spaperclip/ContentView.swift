@@ -683,3 +683,41 @@ struct DetailRow: View {
     }
 }
 
+
+struct ContentView: View {
+    @StateObject private var clipboardMonitor = ClipboardMonitor()
+    
+    var body: some View {
+        NavigationSplitView {
+            VStack(spacing: 10) {
+                // Clipboard history only
+                HistoryListView(
+                    history: clipboardMonitor.history,
+                    selectedHistoryItem: $clipboardMonitor.selectedHistoryItem,
+                    selectedType: $clipboardMonitor.selectedType
+                )
+            }
+            .padding()
+            .navigationTitle("spaperclip")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button(action: {
+                        clipboardMonitor.clearHistory()
+                    }) {
+                        Label("Clear History", systemImage: "trash")
+                    }
+                    .help("Clear clipboard history")
+                    .keyboardShortcut("K", modifiers: [.command, .shift])
+                }
+            }
+        } detail: {
+            ClipboardDetailView(
+                item: clipboardMonitor.selectedHistoryItem,
+                selectedType: $clipboardMonitor.selectedType
+            )
+        }
+        .onDisappear {
+            clipboardMonitor.stopMonitoring()
+        }
+    }
+}
