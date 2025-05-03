@@ -5,8 +5,6 @@
 //  Created by Scott Opell on 5/3/25.
 //
 
-import SwiftUI
-
 // MARK: - App
 
 /// Main application structure
@@ -23,8 +21,7 @@ struct ClipboardViewerApp: App {
         .commands {
             CommandMenu("Clipboard") {
                 Button("Clear History") {
-                    // Would connect to view model to clear history
-                    // This is also available from the toolbar
+                    // TODO
                 }
                 .keyboardShortcut("K", modifiers: [.command, .shift])
             }

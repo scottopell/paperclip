@@ -240,8 +240,7 @@ class ClipboardMonitor: ObservableObject {
                 self.history[oldCurrentIndex].isLive = false
             }
             
-            // Create new history item
-            var newItem = ClipboardHistoryItem(
+            let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 changeCount: pasteboard.changeCount,
                 dataTypes: dataTypes,
@@ -308,25 +307,32 @@ struct ClipboardContentPreview: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
+                    .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                    .cornerRadius(6)
                 } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                    }
+                    .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                    .cornerRadius(6)
                 } else {
                     Text("Binary data: \(dataType.data.count) bytes")
                         .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                        .cornerRadius(6)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(NSColor.textBackgroundColor))
-            .cornerRadius(8)
         } else {
             Text("No content to display")
                 .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(NSColor.textBackgroundColor))
-                .cornerRadius(8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                .cornerRadius(6)
         }
     }
 }
@@ -336,7 +342,7 @@ struct CurrentClipboardView: View {
     @Binding var selectedType: ClipboardDataType?
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Current Clipboard Content:")
                     .font(.headline)
@@ -350,13 +356,14 @@ struct CurrentClipboardView: View {
             
             if let item = item {
                 ClipboardContentPreview(dataType: selectedType)
+                    .frame(maxHeight: 200)
             } else {
                 Text("Monitoring clipboard... Copy something!")
                     .italic()
                     .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(NSColor.textBackgroundColor))
-                    .cornerRadius(8)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                    .cornerRadius(6)
             }
         }
     }
@@ -366,42 +373,61 @@ struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     
     var body: some View {
-        HStack {
-            // Timestamp column
-            Text(formatDate(item.timestamp))
-                .frame(width: 150, alignment: .leading)
-                .font(.system(.body, design: .monospaced))
-            
-            // Type indicators
-            HStack(spacing: 4) {
-                if item.isLive {
-                    Image(systemName: "circle.fill")
-                        .foregroundColor(.green)
-                        .help("Current clipboard content")
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            // Header with timestamp and indicators
+            HStack {
+                // Timestamp
+                Text(formatDate(item.timestamp))
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundColor(.secondary)
                 
-                if item.dataTypes.contains(where: { $0.canRenderAsText }) {
-                    Image(systemName: "doc.text")
-                        .foregroundColor(.blue)
-                }
+                Spacer()
                 
-                if item.dataTypes.contains(where: { $0.canRenderAsImage }) {
-                    Image(systemName: "photo")
-                        .foregroundColor(.green)
-                }
-                
-                if item.dataTypes.contains(where: { $0.uti.contains("url") }) {
-                    Image(systemName: "link")
-                        .foregroundColor(.purple)
+                // Type indicators
+                HStack(spacing: 6) {
+                    if item.isLive {
+                        Label("Current", systemImage: "circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .help("Current clipboard content")
+                    }
+                    
+                    if item.dataTypes.contains(where: { $0.canRenderAsText }) {
+                        Image(systemName: "doc.text")
+                            .foregroundColor(.blue)
+                    }
+                    
+                    if item.dataTypes.contains(where: { $0.canRenderAsImage }) {
+                        Image(systemName: "photo")
+                            .foregroundColor(.green)
+                    }
+                    
+                    if item.dataTypes.contains(where: { $0.uti.contains("url") }) {
+                        Image(systemName: "link")
+                            .foregroundColor(.purple)
+                    }
                 }
             }
-            .frame(width: 80, alignment: .leading)
+            
+            Divider()
+                .padding(.vertical, 2)
             
             // Content preview
             Text(truncateString(item.textRepresentation))
-                .lineLimit(1)
+                .lineLimit(2)
+                .font(.system(.body))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(12)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(item.isLive ? Color.green.opacity(0.5) : Color.gray.opacity(0.3), lineWidth: 1)
+        )
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
         .contextMenu {
             ForEach(item.dataTypes) { dataType in
                 Button(dataType.typeName) {
@@ -424,8 +450,8 @@ struct HistoryItemRow: View {
     }
     
     private func truncateString(_ str: String) -> String {
-        if str.count > 50 {
-            return String(str.prefix(50)) + "..."
+        if str.count > 100 {
+            return String(str.prefix(100)) + "..."
         }
         return str
     }
@@ -445,14 +471,62 @@ struct HistoryItemRow: View {
         }
     }
 }
-
-struct ClipboardDetailView: View {
-    let item: ClipboardHistoryItem?
+struct HistoryListView: View {
+    let history: [ClipboardHistoryItem]
+    @Binding var selectedHistoryItem: ClipboardHistoryItem?
     @Binding var selectedType: ClipboardDataType?
     
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Clipboard History")
+                .font(.headline)
+                .padding(.bottom, 4)
+            
+            if history.isEmpty {
+                Text("No clipboard history yet. Copy something!")
+                    .italic()
+                    .foregroundColor(.secondary)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(history) { item in
+                            HistoryItemRow(item: item)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedHistoryItem = item
+                                    // Update the selected type when selecting a history item
+                                    if let textType = item.dataTypes.first(where: { $0.canRenderAsText }) {
+                                        selectedType = textType
+                                    } else {
+                                        selectedType = item.dataTypes.first
+                                    }
+                                }
+                                .background(
+                                    selectedHistoryItem?.id == item.id ?
+                                        Color.accentColor.opacity(0.1) : Color.clear
+                                )
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+                .cornerRadius(8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+struct ClipboardDetailView: View {
+    let item: ClipboardHistoryItem?
+    @Binding var selectedType: ClipboardDataType?
+    @State private var selectedTab = 0
+    
+    var body: some View {
         if let item = item {
-            VStack {
+            VStack(spacing: 0) {
+                // Header with type selector
                 HStack {
                     if item.isLive {
                         Label("Current Clipboard Content", systemImage: "circle.fill")
@@ -466,54 +540,104 @@ struct ClipboardDetailView: View {
                     ContentTypePicker(dataTypes: item.dataTypes, selectedType: $selectedType)
                 }
                 .font(.headline)
-                .padding(.bottom, 5)
+                .padding([.horizontal, .top])
                 
-                Form {
-                    Section("Metadata") {
-                        LabeledContent("Timestamp") {
-                            Text(formatDate(item.timestamp))
+                // Tab selector
+                Picker("View", selection: $selectedTab) {
+                    Text("Preview").tag(0)
+                    Text("Details").tag(1)
+                    Text("Actions").tag(2)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+                
+                Divider()
+                    .padding(.top, 8)
+                
+                // Tab content
+                TabView(selection: $selectedTab) {
+                    // Preview Tab
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if let dataType = selectedType {
+                                ClipboardContentPreview(dataType: dataType)
+                                    .frame(minHeight: 300)
+                            } else {
+                                Text("No content type selected")
+                                    .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                            }
+                        }
+                        .padding()
+                    }
+                    .tag(0)
+                    
+                    // Details Tab
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            // Metadata section
+                            GroupBox("Metadata") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    DetailRow(label: "Timestamp", value: formatDate(item.timestamp))
+                                    DetailRow(label: "Available Types", value: "\(item.dataTypes.count)")
+                                    
+                                    if let dataType = selectedType {
+                                        Divider()
+                                        
+                                        DetailRow(label: "Type", value: dataType.typeName)
+                                        DetailRow(label: "UTI", value: dataType.uti)
+                                        DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
+                                    }
+                                }
+                                .padding(.vertical, 8)
+                            }
+                            .padding(.horizontal)
+                        }
+                        .padding(.vertical)
+                    }
+                    .tag(1)
+                    
+                    // Actions Tab
+                    VStack(spacing: 20) {
+                        if let dataType = selectedType {
+                            Button(action: {
+                                copyToClipboard(dataType)
+                            }) {
+                                Label("Copy This Format (\(dataType.typeName))", systemImage: "doc.on.doc")
+                                    .frame(maxWidth: 300)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
                         }
                         
-                        LabeledContent("Available Types") {
-                            Text("\(item.dataTypes.count)")
+                        Button(action: {
+                            copyAllDataTypes(item)
+                        }) {
+                            Label("Copy All Formats", systemImage: "rectangle.on.rectangle")
+                                .frame(maxWidth: 300)
                         }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        
+                        Spacer()
                     }
-                    
-                    Section("Content Preview") {
-                        ClipboardContentPreview(dataType: selectedType)
-                            .frame(height: 300)
-                    }
-                    
-                    if let dataType = selectedType {
-                        Section("Type Details") {
-                            LabeledContent("Type") {
-                                Text(dataType.typeName)
-                            }
-                            
-                            LabeledContent("UTI") {
-                                Text(dataType.uti)
-                            }
-                            
-                            LabeledContent("Size") {
-                                Text("\(dataType.data.count) bytes")
-                            }
-                            
-                            Button("Copy This Format") {
-                                copyToClipboard(dataType)
-                            }
-                            
-                            Button("Copy All Formats") {
-                                copyAllDataTypes(item)
-                            }
-                        }
-                    }
+                    .padding()
+                    .tag(2)
                 }
             }
-            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            Text("Select a clipboard item to view details")
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            VStack {
+                Image(systemName: "clipboard")
+                    .font(.system(size: 48))
+                    .foregroundColor(.secondary)
+                    .padding(.bottom)
+                
+                Text("Select a clipboard item to view details")
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
     
@@ -539,77 +663,22 @@ struct ClipboardDetailView: View {
     }
 }
 
-struct HistoryListView: View {
-    let history: [ClipboardHistoryItem]
-    @Binding var selectedHistoryItem: ClipboardHistoryItem?
+// Helper view for displaying detail rows
+struct DetailRow: View {
+    let label: String
+    let value: String
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Clipboard History:")
-                .font(.headline)
+        HStack(alignment: .top) {
+            Text(label)
+                .frame(width: 120, alignment: .leading)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
             
-            if history.isEmpty {
-                Text("No clipboard history yet. Copy something!")
-                    .italic()
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                List(history, selection: $selectedHistoryItem) { item in
-                    HistoryItemRow(item: item)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedHistoryItem = item
-                        }
-                }
-                .listStyle(.bordered(alternatesRowBackgrounds: true))
-            }
-        }
-    }
-}
-
-struct ContentView: View {
-    @StateObject private var clipboardMonitor = ClipboardMonitor()
-    
-    var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 10) {
-                // Current clipboard content
-                CurrentClipboardView(
-                    item: clipboardMonitor.currentItem,
-                    selectedType: $clipboardMonitor.selectedType
-                )
-                .frame(height: 200)
-                
-                Divider()
-                    .padding(.vertical, 5)
-                
-                // Clipboard history
-                HistoryListView(
-                    history: clipboardMonitor.history,
-                    selectedHistoryItem: $clipboardMonitor.selectedHistoryItem
-                )
-            }
-            .padding()
-            .navigationTitle("spaperclip")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button(action: {
-                        clipboardMonitor.clearHistory()
-                    }) {
-                        Label("Clear History", systemImage: "trash")
-                    }
-                    .help("Clear clipboard history")
-                    .keyboardShortcut("K", modifiers: [.command, .shift])
-                }
-            }
-        } detail: {
-            ClipboardDetailView(
-                item: clipboardMonitor.selectedHistoryItem,
-                selectedType: $clipboardMonitor.selectedType
-            )
-        }
-        .onDisappear {
-            clipboardMonitor.stopMonitoring()
+            Text(value)
+                .font(.subheadline)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
