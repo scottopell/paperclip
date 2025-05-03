@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import PDFKit
 import UniformTypeIdentifiers
 import os
 
@@ -533,13 +534,75 @@ struct HistoryListView: View {
     }
 }
 
+
+struct PDFImageView: NSViewRepresentable {
+    let image: NSImage
+    
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.document = PDFDocument()
+        
+        // Convert NSImage to PDFPage
+        if let page = PDFPage(image: image) {
+            view.document?.insert(page, at: 0)
+        }
+        
+        // Configure the view
+        view.autoScales = true
+        view.displayMode = .singlePage
+        view.displayDirection = .vertical
+        
+        return view
+    }
+    
+    func updateNSView(_ nsView: PDFView, context: Context) {
+        // Empty - no updates needed
+    }
+}
+
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
     let item: ClipboardHistoryItem?
-    @State private var selectedTypeIndex = 0
-
+    @State private var selectedGroupIndex = 0
+    @State private var selectedFormatIndex = 0
+    
+    // Group data types by their byte content
+    private func groupDataTypesByContent(_ dataTypes: [ClipboardDataType]) -> [(data: Data, types: [ClipboardDataType])] {
+        var groups: [Data: [ClipboardDataType]] = [:]
+        
+        for dataType in dataTypes {
+            if groups[dataType.data] != nil {
+                groups[dataType.data]?.append(dataType)
+            } else {
+                groups[dataType.data] = [dataType]
+            }
+        }
+        
+        // Sort groups - prioritize text and image types first
+        return groups.map { (data: $0.key, types: $0.value.sorted {
+            if $0.canRenderAsText && !$1.canRenderAsText { return true }
+            if !$0.canRenderAsText && $1.canRenderAsText { return false }
+            if $0.canRenderAsImage && !$1.canRenderAsImage { return true }
+            if !$0.canRenderAsImage && $1.canRenderAsImage { return false }
+            return $0.typeName < $1.typeName
+        })}
+        .sorted { lhs, rhs in
+            // Prioritize text and image types over others
+            let lhsPreviewable = lhs.types.first?.isPreviewable ?? false
+            let rhsPreviewable = rhs.types.first?.isPreviewable ?? false
+            
+            if lhsPreviewable && !rhsPreviewable { return true }
+            if !lhsPreviewable && rhsPreviewable { return false }
+            
+            // Then sort by data size
+            return lhs.data.count < rhs.data.count
+        }
+    }
+    
     var body: some View {
         if let item = item {
+            let contentGroups = groupDataTypesByContent(item.dataTypes)
+            
             VStack(spacing: 8) {
                 // Header
                 HStack {
@@ -549,35 +612,41 @@ struct ClipboardDetailView: View {
                     } else {
                         Text("Clipboard Item")
                     }
-
+                    
                     Text(formatDate(item.timestamp))
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.leading, 8)
-
+                    
                     Spacer()
                 }
                 .font(.headline)
                 .padding([.horizontal, .top])
-
-                // Content type tabs
-                if !item.dataTypes.isEmpty {
-                    TabView(selection: $selectedTypeIndex) {
-                        ForEach(Array(item.dataTypes.enumerated()), id: \.element.id) {
-                            index, dataType in
-                            contentView(for: dataType)
+                
+                // Content groups as tabs
+                if !contentGroups.isEmpty {
+                    TabView(selection: $selectedGroupIndex) {
+                        ForEach(Array(contentGroups.enumerated()), id: \.offset) { groupIndex, group in
+                            // Get the currently selected format for this group
+                            let currentType = group.types[min(selectedFormatIndex, group.types.count - 1)]
+                            
+                            contentView(for: currentType, allFormats: group.types)
                                 .tabItem {
-                                    Text(dataType.typeName)
-                                        .font(dataType.isPreviewable ? .headline : .body)
-                                        .foregroundColor(
-                                            dataType.isPreviewable ? .primary : .secondary)
+                                    let label = getGroupTabLabel(group.types)
+                                    Text(label)
+                                        .font(currentType.isPreviewable ? .headline : .body)
+                                        .foregroundColor(currentType.isPreviewable ? .primary : .secondary)
                                 }
-                                .tag(index)
+                                .tag(groupIndex)
                         }
                     }
-                    .onChange(of: selectedTypeIndex) { newIndex in
-                        if newIndex < item.dataTypes.count {
-                            monitor.selectedType = item.dataTypes[newIndex]
+                    .onChange(of: selectedGroupIndex) { newIndex in
+                        // Reset format selection when changing groups
+                        selectedFormatIndex = 0
+                        
+                        // Update the monitor's selected type
+                        if newIndex < contentGroups.count && !contentGroups[newIndex].types.isEmpty {
+                            monitor.selectedType = contentGroups[newIndex].types[0]
                         }
                     }
                 } else {
@@ -588,14 +657,21 @@ struct ClipboardDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                // Set initial selected type
-                if let selectedType = monitor.selectedType,
-                    let index = item.dataTypes.firstIndex(where: { $0.id == selectedType.id })
-                {
-                    selectedTypeIndex = index
-                } else if !item.dataTypes.isEmpty {
-                    selectedTypeIndex = 0
-                    monitor.selectedType = item.dataTypes[0]
+                // Find the group containing the currently selected type
+                if let selectedType = monitor.selectedType {
+                    let groups = groupDataTypesByContent(item.dataTypes)
+                    for (groupIndex, group) in groups.enumerated() {
+                        if let formatIndex = group.types.firstIndex(where: { $0.id == selectedType.id }) {
+                            selectedGroupIndex = groupIndex
+                            selectedFormatIndex = formatIndex
+                            break
+                        }
+                    }
+                } else if !contentGroups.isEmpty {
+                    // Default selection
+                    selectedGroupIndex = 0
+                    selectedFormatIndex = 0
+                    monitor.selectedType = contentGroups[0].types[0]
                 }
             }
         } else {
@@ -604,17 +680,56 @@ struct ClipboardDetailView: View {
                     .font(.system(size: 48))
                     .foregroundColor(.secondary)
                     .padding(.bottom)
-
+                
                 Text("Select a clipboard item to view details")
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
-
+    
+    // Generate tab label for a group of data types
+    private func getGroupTabLabel(_ types: [ClipboardDataType]) -> String {
+        if types.count == 1 {
+            return types[0].typeName
+        }
+        
+        // For multiple formats with same content, use a general label based on content type
+        if let textType = types.first(where: { $0.canRenderAsText }) {
+            return "Text (\(types.count) formats)"
+        } else if let imageType = types.first(where: { $0.canRenderAsImage }) {
+            return "Image (\(types.count) formats)"
+        } else {
+            return "Data (\(types.count) formats)"
+        }
+    }
+    
     @ViewBuilder
-    private func contentView(for dataType: ClipboardDataType) -> some View {
+    private func contentView(for dataType: ClipboardDataType, allFormats: [ClipboardDataType]) -> some View {
         VStack {
+            // Format selector (only show if multiple formats available)
+            if allFormats.count > 1 {
+                Menu {
+                    ForEach(Array(allFormats.enumerated()), id: \.element.id) { index, format in
+                        Button(format.typeName) {
+                            selectedFormatIndex = index
+                            monitor.selectedType = format
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text("Format: \(dataType.typeName)")
+                        Image(systemName: "chevron.down")
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
+            }
+            
             // Preview section
             Group {
                 if dataType.canRenderAsText, let text = dataType.getTextRepresentation() {
@@ -625,27 +740,23 @@ struct ClipboardDetailView: View {
                             .textSelection(.enabled)
                     }
                 } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
-                    ScrollView([.horizontal, .vertical]) {
-                        Image(nsImage: nsImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                    }
+                    PDFImageView(image: nsImage)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack {
                         Text("Binary data: \(dataType.data.count) bytes")
                             .foregroundColor(.secondary)
                             .padding()
-
+                        
                         // ASCII interpretation for small binary data
                         if dataType.data.count < 1024 {
                             Divider()
-
+                            
                             VStack(alignment: .leading) {
                                 Text("ASCII Interpretation:")
                                     .font(.subheadline)
                                     .padding(.bottom, 4)
-
+                                
                                 ScrollView {
                                     Text(asciiRepresentation(of: dataType.data))
                                         .font(.system(.body, design: .monospaced))
@@ -660,21 +771,48 @@ struct ClipboardDetailView: View {
             }
             .background(Color(NSColor.textBackgroundColor).opacity(0.5))
             .cornerRadius(6)
-
+            
             // Metadata section
             VStack(alignment: .leading, spacing: 8) {
                 DetailRow(label: "Type", value: dataType.typeName)
                 DetailRow(label: "UTI", value: dataType.uti)
                 DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
-
+                
+                // Available formats (if more than one)
+                if allFormats.count > 1 {
+                    HStack(alignment: .top) {
+                        Text("All Formats:")
+                            .frame(width: 120, alignment: .leading)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(allFormats) { format in
+                                Text("• \(format.typeName)")
+                                    .font(.subheadline)
+                            }
+                        }
+                    }
+                }
+                
                 Button(action: {
                     copyToClipboard(dataType)
                 }) {
-                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                    Label("Copy as \(dataType.typeName)", systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .padding(.top, 8)
+                
+                if allFormats.count > 1 {
+                    Button(action: {
+                        copyAllFormats(allFormats)
+                    }) {
+                        Label("Copy All Formats", systemImage: "rectangle.on.rectangle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
             .padding()
             .background(Color(NSColor.textBackgroundColor).opacity(0.3))
@@ -682,46 +820,54 @@ struct ClipboardDetailView: View {
         }
         .padding()
     }
-
+    
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
-
+    
     private func copyToClipboard(_ dataType: ClipboardDataType) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
     }
-
+    
+    private func copyAllFormats(_ formats: [ClipboardDataType]) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        
+        for dataType in formats {
+            pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
+        }
+    }
+    
     private func asciiRepresentation(of data: Data) -> String {
         var result = ""
         let bytes = [UInt8](data)
-
+        
         for (index, byte) in bytes.enumerated() {
             // Add newline every 16 bytes
             if index % 16 == 0 && index > 0 {
                 result += "\n"
             }
-
+            
             // Add readable character or dot for non-printable
             if byte >= 32 && byte <= 126 {
                 result += String(format: "%c", byte)
             } else {
                 result += "."
             }
-
+            
             // Add space between characters
             if index % 16 != 15 && index != bytes.count - 1 {
                 result += " "
             }
         }
-
+        
         return result
     }
-}
-// Helper view for displaying detail rows
+}// Helper view for displaying detail rows
 struct DetailRow: View {
     let label: String
     let value: String
