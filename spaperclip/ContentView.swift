@@ -1,48 +1,15 @@
 import AppKit
 import Combine
-import SwiftUI
 import PDFKit
+import SwiftUI
 import UniformTypeIdentifiers
 import os
 
 // MARK: - Models
 
-struct ClipboardDataType: Identifiable, Hashable {
+struct ClipboardFormat: Identifiable, Hashable {
     let id = UUID()
     let uti: String
-    let data: Data
-    let description: String
-
-    var isPreviewable: Bool {
-        return canRenderAsText || canRenderAsImage
-    }
-
-    var canRenderAsText: Bool {
-        let textTypes = [
-            UTType.plainText.identifier,
-            UTType.rtf.identifier,
-            UTType.html.identifier,
-            "public.utf8-plain-text",
-            "public.rtf",
-            "public.html",
-        ]
-        return textTypes.contains(uti)
-    }
-
-    var canRenderAsImage: Bool {
-        let imageTypes = [
-            UTType.png.identifier,
-            UTType.jpeg.identifier,
-            UTType.tiff.identifier,
-            UTType.pdf.identifier,
-            UTType.image.identifier,
-            "public.png",
-            "public.jpeg",
-            "public.tiff",
-            "com.adobe.pdf",
-        ]
-        return imageTypes.contains(uti)
-    }
 
     var typeName: String {
         switch uti {
@@ -74,24 +41,86 @@ struct ClipboardDataType: Identifiable, Hashable {
         }
     }
 
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(uti)
+    }
+
+    static func == (lhs: ClipboardFormat, rhs: ClipboardFormat) -> Bool {
+        return lhs.id == rhs.id && lhs.uti == rhs.uti
+    }
+}
+
+struct ClipboardContent: Identifiable, Hashable {
+    let id = UUID()
+    let data: Data
+    var formats: [ClipboardFormat]
+    let description: String
+
+    var isPreviewable: Bool {
+        return canRenderAsText || canRenderAsImage
+    }
+
+    var canRenderAsText: Bool {
+        let textTypes = [
+            UTType.plainText.identifier,
+            UTType.rtf.identifier,
+            UTType.html.identifier,
+            "public.utf8-plain-text",
+            "public.rtf",
+            "public.html",
+        ]
+        return formats.contains { textTypes.contains($0.uti) }
+    }
+
+    var canRenderAsImage: Bool {
+        let imageTypes = [
+            UTType.png.identifier,
+            UTType.jpeg.identifier,
+            UTType.tiff.identifier,
+            UTType.pdf.identifier,
+            UTType.image.identifier,
+            "public.png",
+            "public.jpeg",
+            "public.tiff",
+            "com.adobe.pdf",
+        ]
+        return formats.contains { imageTypes.contains($0.uti) }
+    }
+
     func getTextRepresentation() -> String? {
-        if uti == UTType.plainText.identifier || uti == "public.utf8-plain-text" {
+        // Try to get text from plain text format first
+        if let textFormat = formats.first(where: {
+            $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+        }) {
             return String(data: data, encoding: .utf8)
-        } else if uti == UTType.rtf.identifier || uti == "public.rtf" {
+        }
+        // Then try RTF format
+        else if let rtfFormat = formats.first(where: {
+            $0.uti == UTType.rtf.identifier || $0.uti == "public.rtf"
+        }) {
             if let attributedString = try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil)
             {
                 return attributedString.string
             }
-        } else if uti == UTType.html.identifier || uti == "public.html" {
+        }
+        // Then try HTML format
+        else if let htmlFormat = formats.first(where: {
+            $0.uti == UTType.html.identifier || $0.uti == "public.html"
+        }) {
             if let attributedString = try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.html],
                 documentAttributes: nil)
             {
                 return attributedString.string
             }
-        } else if uti == UTType.url.identifier || uti == "public.url" {
+        }
+        // Try URL format
+        else if let urlFormat = formats.first(where: {
+            $0.uti == UTType.url.identifier || $0.uti == "public.url"
+        }) {
             return String(data: data, encoding: .utf8)
         }
         return nil
@@ -99,11 +128,11 @@ struct ClipboardDataType: Identifiable, Hashable {
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
-        hasher.combine(uti)
+        hasher.combine(data)
     }
 
-    static func == (lhs: ClipboardDataType, rhs: ClipboardDataType) -> Bool {
-        return lhs.id == rhs.id && lhs.uti == rhs.uti
+    static func == (lhs: ClipboardContent, rhs: ClipboardContent) -> Bool {
+        return lhs.id == rhs.id
     }
 }
 
@@ -111,11 +140,11 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let id = UUID()
     let timestamp: Date
     let changeCount: Int
-    var dataTypes: [ClipboardDataType]
+    var contents: [ClipboardContent]
 
     var textRepresentation: String {
-        for dataType in dataTypes {
-            if let text = dataType.getTextRepresentation() {
+        for content in contents {
+            if let text = content.getTextRepresentation() {
                 return text
             }
         }
@@ -123,11 +152,15 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     }
 
     var hasImageRepresentation: Bool {
-        return dataTypes.contains { $0.canRenderAsImage }
+        return contents.contains { $0.canRenderAsImage }
     }
 
     static func == (lhs: ClipboardHistoryItem, rhs: ClipboardHistoryItem) -> Bool {
         return lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 
@@ -136,7 +169,8 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
 class ClipboardMonitor: ObservableObject {
     @Published var currentItem: ClipboardHistoryItem?
     @Published var history: [ClipboardHistoryItem] = []
-    @Published var selectedType: ClipboardDataType?
+    @Published var selectedContent: ClipboardContent?
+    @Published var selectedFormat: ClipboardFormat?
     @Published var selectedHistoryItem: ClipboardHistoryItem?
     @Published var currentItemID: UUID?
 
@@ -206,24 +240,26 @@ class ClipboardMonitor: ObservableObject {
             return
         }
 
-        var dataTypes: [ClipboardDataType] = []
+        // Create a dictionary to group data by content
+        var contentGroups: [Data: (description: String, formats: [ClipboardFormat])] = [:]
 
+        // First pass: collect all data and formats
         for type in knownTypes {
             if availableTypes.contains(NSPasteboard.PasteboardType(type)),
                 let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type))
             {
-
                 let description =
                     type == "public.utf8-plain-text"
                     ? (String(data: data, encoding: .utf8) ?? "Unknown text data")
                     : "Binary data (\(data.count) bytes)"
 
-                let dataType = ClipboardDataType(
-                    uti: type,
-                    data: data,
-                    description: description
-                )
-                dataTypes.append(dataType)
+                let format = ClipboardFormat(uti: type)
+
+                if contentGroups[data] != nil {
+                    contentGroups[data]?.formats.append(format)
+                } else {
+                    contentGroups[data] = (description: description, formats: [format])
+                }
             }
         }
 
@@ -233,14 +269,25 @@ class ClipboardMonitor: ObservableObject {
             if !knownTypes.contains(typeString),
                 let data = pasteboard.data(forType: type)
             {
+                let format = ClipboardFormat(uti: typeString)
 
-                let dataType = ClipboardDataType(
-                    uti: typeString,
-                    data: data,
-                    description: "Binary data (\(data.count) bytes)"
-                )
-                dataTypes.append(dataType)
+                if contentGroups[data] != nil {
+                    contentGroups[data]?.formats.append(format)
+                } else {
+                    contentGroups[data] = (
+                        description: "Binary data (\(data.count) bytes)", formats: [format]
+                    )
+                }
             }
+        }
+
+        // Convert dictionary to array of ClipboardContent
+        let contents = contentGroups.map { (data, info) in
+            ClipboardContent(
+                data: data,
+                formats: info.formats,
+                description: info.description
+            )
         }
 
         DispatchQueue.main.async { [weak self] in
@@ -249,7 +296,7 @@ class ClipboardMonitor: ObservableObject {
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 changeCount: pasteboard.changeCount,
-                dataTypes: dataTypes
+                contents: contents
             )
 
             // Update current item reference
@@ -257,7 +304,7 @@ class ClipboardMonitor: ObservableObject {
             // Set the current item ID
             self.currentItemID = newItem.id
 
-            if !dataTypes.isEmpty {
+            if !contents.isEmpty {
                 // Insert at beginning (most recent first)
                 self.history.insert(newItem, at: 0)
 
@@ -266,15 +313,25 @@ class ClipboardMonitor: ObservableObject {
                     self.history = Array(self.history.prefix(100))
                 }
 
-                // Set initially selected type to text if available
-                if let textType = dataTypes.first(where: { $0.canRenderAsText }) {
-                    self.selectedType = textType
+                // Set initially selected content to text content if available
+                if let textContent = contents.first(where: { $0.canRenderAsText }) {
+                    self.selectedContent = textContent
+                    // Set initially selected format to a text format if available
+                    if let textFormat = textContent.formats.first(where: {
+                        $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+                    }) {
+                        self.selectedFormat = textFormat
+                    } else {
+                        self.selectedFormat = textContent.formats.first
+                    }
                 } else {
-                    self.selectedType = dataTypes.first
+                    self.selectedContent = contents.first
+                    self.selectedFormat = contents.first?.formats.first
                 }
             }
 
-            self.logger.info("UI updated with new clipboard content: \(dataTypes.count) data types")
+            self.logger.info(
+                "UI updated with new clipboard content: \(contents.count) content groups")
         }
     }
 
@@ -285,30 +342,30 @@ class ClipboardMonitor: ObservableObject {
 
 // MARK: - Views
 
-struct ContentTypePicker: View {
+struct ContentFormatPicker: View {
     @ObservedObject var monitor: ClipboardMonitor
-
-    let dataTypes: [ClipboardDataType]
+    let content: ClipboardContent
 
     var body: some View {
-        Picker("Content Type", selection: $monitor.selectedType) {
-            ForEach(dataTypes, id: \.self) { dataType in
-                Text(dataType.typeName)
-                    .tag(dataType as ClipboardDataType?)
+        Picker("Content Format", selection: $monitor.selectedFormat) {
+            ForEach(content.formats, id: \.self) { format in
+                Text(format.typeName)
+                    .tag(format as ClipboardFormat?)
             }
         }
         .pickerStyle(.menu)
-        .disabled(dataTypes.isEmpty)
+        .disabled(content.formats.isEmpty)
     }
 }
 
 struct ClipboardContentPreview: View {
-    let dataType: ClipboardDataType?
+    let content: ClipboardContent?
+    let selectedFormat: ClipboardFormat?
 
     var body: some View {
-        if let dataType = dataType {
+        if let content = content {
             VStack {
-                if dataType.canRenderAsText, let text = dataType.getTextRepresentation() {
+                if content.canRenderAsText, let text = content.getTextRepresentation() {
                     ScrollView {
                         Text(text)
                             .padding()
@@ -317,7 +374,7 @@ struct ClipboardContentPreview: View {
                     }
                     .background(Color(NSColor.textBackgroundColor).opacity(0.5))
                     .cornerRadius(6)
-                } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
+                } else if content.canRenderAsImage, let nsImage = NSImage(data: content.data) {
                     ScrollView([.horizontal, .vertical]) {
                         Image(nsImage: nsImage)
                             .resizable()
@@ -327,7 +384,7 @@ struct ClipboardContentPreview: View {
                     .background(Color(NSColor.textBackgroundColor).opacity(0.5))
                     .cornerRadius(6)
                 } else {
-                    Text("Binary data: \(dataType.data.count) bytes")
+                    Text("Binary data: \(content.data.count) bytes")
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                         .background(Color(NSColor.textBackgroundColor).opacity(0.5))
@@ -356,14 +413,18 @@ struct CurrentClipboardView: View {
 
                 Spacer()
 
-                if let item = monitor.currentItem, !item.dataTypes.isEmpty {
-                    ContentTypePicker(monitor: monitor, dataTypes: item.dataTypes)
+                if let item = monitor.currentItem, !item.contents.isEmpty,
+                    let content = monitor.selectedContent
+                {
+                    ContentFormatPicker(monitor: monitor, content: content)
                 }
             }
 
-            if let item = monitor.currentItem {
-                ClipboardContentPreview(dataType: monitor.selectedType)
-                    .frame(maxHeight: 200)
+            if let item = monitor.currentItem, !item.contents.isEmpty {
+                ClipboardContentPreview(
+                    content: monitor.selectedContent, selectedFormat: monitor.selectedFormat
+                )
+                .frame(maxHeight: 200)
             } else {
                 Text("Monitoring clipboard... Copy something!")
                     .italic()
@@ -400,17 +461,23 @@ struct HistoryItemRow: View {
                             .help("Current clipboard content")
                     }
 
-                    if item.dataTypes.contains(where: { $0.canRenderAsText }) {
+                    if item.contents.contains(where: { $0.canRenderAsText }) {
                         Image(systemName: "doc.text")
                             .foregroundColor(.blue)
                     }
 
-                    if item.dataTypes.contains(where: { $0.canRenderAsImage }) {
+                    if item.contents.contains(where: { $0.canRenderAsImage }) {
                         Image(systemName: "photo")
                             .foregroundColor(.green)
                     }
 
-                    if item.dataTypes.contains(where: { $0.uti.contains("url") }) {
+                    let hasURL = item.contents.contains(where: {
+                        $0.formats.contains { format in
+                            format.uti.contains("url")
+                        }
+                    })
+
+                    if hasURL {
                         Image(systemName: "link")
                             .foregroundColor(.purple)
                     }
@@ -448,17 +515,37 @@ struct HistoryItemRow: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .contextMenu {
-            ForEach(item.dataTypes) { dataType in
-                Button(dataType.typeName) {
-                    copyToClipboard(dataType)
+            ForEach(item.contents) { content in
+                if content.formats.count == 1 {
+                    Button(content.formats[0].typeName) {
+                        copyToClipboard(content)
+                    }
+                } else {
+                    Menu(getContentMenuLabel(content)) {
+                        ForEach(content.formats) { format in
+                            Button(format.typeName) {
+                                copyToClipboard(content)
+                            }
+                        }
+                    }
                 }
             }
 
             Divider()
 
-            Button("Copy All Data Types") {
-                copyAllDataTypes(item)
+            Button("Copy All Content Types") {
+                copyAllContentTypes(item)
             }
+        }
+    }
+
+    private func getContentMenuLabel(_ content: ClipboardContent) -> String {
+        if content.canRenderAsText {
+            return "Text Content"
+        } else if content.canRenderAsImage {
+            return "Image Content"
+        } else {
+            return "Data Content (\(content.data.count) bytes)"
         }
     }
 
@@ -475,21 +562,27 @@ struct HistoryItemRow: View {
         return str
     }
 
-    private func copyToClipboard(_ dataType: ClipboardDataType) {
+    private func copyToClipboard(_ content: ClipboardContent) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
+
+        for format in content.formats {
+            pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
+        }
     }
 
-    private func copyAllDataTypes(_ item: ClipboardHistoryItem) {
+    private func copyAllContentTypes(_ item: ClipboardHistoryItem) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
 
-        for dataType in item.dataTypes {
-            pasteboard.setData(dataType.data, forType: NSPasteboard.PasteboardType(dataType.uti))
+        for content in item.contents {
+            for format in content.formats {
+                pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
+            }
         }
     }
 }
+
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
 
@@ -513,13 +606,25 @@ struct HistoryListView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     monitor.selectedHistoryItem = item
-                                    // Update the selected type when selecting a history item
-                                    if let textType = item.dataTypes.first(where: {
+
+                                    // Update the selected content when selecting a history item
+                                    if let textContent = item.contents.first(where: {
                                         $0.canRenderAsText
                                     }) {
-                                        monitor.selectedType = textType
+                                        monitor.selectedContent = textContent
+
+                                        // Update the selected format to text format if available
+                                        if let textFormat = textContent.formats.first(where: {
+                                            $0.uti == UTType.plainText.identifier
+                                                || $0.uti == "public.utf8-plain-text"
+                                        }) {
+                                            monitor.selectedFormat = textFormat
+                                        } else {
+                                            monitor.selectedFormat = textContent.formats.first
+                                        }
                                     } else {
-                                        monitor.selectedType = item.dataTypes.first
+                                        monitor.selectedContent = item.contents.first
+                                        monitor.selectedFormat = item.contents.first?.formats.first
                                     }
                                 }
                         }
@@ -541,28 +646,28 @@ struct HistoryListView: View {
 struct PDFImageView: NSViewRepresentable {
     let image: NSImage
     @State private var document: PDFDocument? = nil
-    
+
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
-        
+
         // Configure the view
         view.autoScales = true
         view.displayMode = .singlePage
         view.displayDirection = .vertical
-        
+
         // Start the document creation process
         createDocumentAsync()
-        
+
         return view
     }
-    
+
     func updateNSView(_ nsView: PDFView, context: Context) {
         // Apply document when it becomes available
         if let doc = document {
             nsView.document = doc
         }
     }
-    
+
     private func createDocumentAsync() {
         // Use background QoS to avoid priority inversion
         DispatchQueue.global(qos: .background).async {
@@ -570,7 +675,7 @@ struct PDFImageView: NSViewRepresentable {
             if let page = PDFPage(image: image) {
                 doc.insert(page, at: 0)
             }
-            
+
             DispatchQueue.main.async {
                 self.document = doc
                 // No need for updateNSView to be called explicitly -
@@ -583,46 +688,11 @@ struct PDFImageView: NSViewRepresentable {
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
     let item: ClipboardHistoryItem?
-    @State private var selectedGroupIndex = 0
+    @State private var selectedContentIndex = 0
     @State private var selectedFormatIndex = 0
-    
-    // Group data types by their byte content
-    private func groupDataTypesByContent(_ dataTypes: [ClipboardDataType]) -> [(data: Data, types: [ClipboardDataType])] {
-        var groups: [Data: [ClipboardDataType]] = [:]
-        
-        for dataType in dataTypes {
-            if groups[dataType.data] != nil {
-                groups[dataType.data]?.append(dataType)
-            } else {
-                groups[dataType.data] = [dataType]
-            }
-        }
-        
-        // Sort groups - prioritize text and image types first
-        return groups.map { (data: $0.key, types: $0.value.sorted {
-            if $0.canRenderAsText && !$1.canRenderAsText { return true }
-            if !$0.canRenderAsText && $1.canRenderAsText { return false }
-            if $0.canRenderAsImage && !$1.canRenderAsImage { return true }
-            if !$0.canRenderAsImage && $1.canRenderAsImage { return false }
-            return $0.typeName < $1.typeName
-        })}
-        .sorted { lhs, rhs in
-            // Prioritize text and image types over others
-            let lhsPreviewable = lhs.types.first?.isPreviewable ?? false
-            let rhsPreviewable = rhs.types.first?.isPreviewable ?? false
-            
-            if lhsPreviewable && !rhsPreviewable { return true }
-            if !lhsPreviewable && rhsPreviewable { return false }
-            
-            // Then sort by data size
-            return lhs.data.count < rhs.data.count
-        }
-    }
-    
+
     var body: some View {
         if let item = item {
-            let contentGroups = groupDataTypesByContent(item.dataTypes)
-            
             VStack(spacing: 8) {
                 // Header
                 HStack {
@@ -632,41 +702,46 @@ struct ClipboardDetailView: View {
                     } else {
                         Text("Clipboard Item")
                     }
-                    
+
                     Text(formatDate(item.timestamp))
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.leading, 8)
-                    
+
                     Spacer()
                 }
                 .font(.headline)
                 .padding([.horizontal, .top])
-                
+
                 // Content groups as tabs
-                if !contentGroups.isEmpty {
-                    TabView(selection: $selectedGroupIndex) {
-                        ForEach(Array(contentGroups.enumerated()), id: \.offset) { groupIndex, group in
-                            // Get the currently selected format for this group
-                            let currentType = group.types[min(selectedFormatIndex, group.types.count - 1)]
-                            
-                            contentView(for: currentType, allFormats: group.types)
+                if !item.contents.isEmpty {
+                    TabView(selection: $selectedContentIndex) {
+                        ForEach(Array(item.contents.enumerated()), id: \.element.id) {
+                            contentIndex, content in
+                            // Get the currently selected format
+                            let currentFormat = content.formats[
+                                min(selectedFormatIndex, content.formats.count - 1)]
+
+                            contentView(for: content, selectedFormat: currentFormat)
                                 .tabItem {
-                                    let label = getGroupTabLabel(group.types)
+                                    let label = getContentTabLabel(content)
                                     Text(label)
-                                        .font(currentType.isPreviewable ? .headline : .body)
-                                        .foregroundColor(currentType.isPreviewable ? .primary : .secondary)
+                                        .font(content.isPreviewable ? .headline : .body)
+                                        .foregroundColor(
+                                            content.isPreviewable ? .primary : .secondary)
                                 }
-                                .tag(groupIndex)
+                                .tag(contentIndex)
                         }
                     }
-                    .onChange(of: selectedGroupIndex) { newIndex in
-                        // Reset format selection when changing groups
+                    .onChange(of: selectedContentIndex) { newIndex in
+                        // Reset format selection when changing content
                         selectedFormatIndex = 0
-                        
-                        // Update the monitor's selected type
-                        if newIndex < contentGroups.count && !contentGroups[newIndex].types.isEmpty {
-                            monitor.selectedType = contentGroups[newIndex].types[0]
+
+                        // Update the monitor's selected content and format
+                        if newIndex < item.contents.count {
+                            let content = item.contents[newIndex]
+                            monitor.selectedContent = content
+                            monitor.selectedFormat = content.formats.first
                         }
                     }
                 } else {
@@ -677,21 +752,27 @@ struct ClipboardDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                // Find the group containing the currently selected type
-                if let selectedType = monitor.selectedType {
-                    let groups = groupDataTypesByContent(item.dataTypes)
-                    for (groupIndex, group) in groups.enumerated() {
-                        if let formatIndex = group.types.firstIndex(where: { $0.id == selectedType.id }) {
-                            selectedGroupIndex = groupIndex
+                // Find the content containing the currently selected format
+                if let selectedContent = monitor.selectedContent,
+                    let selectedFormat = monitor.selectedFormat
+                {
+                    if let contentIndex = item.contents.firstIndex(where: {
+                        $0.id == selectedContent.id
+                    }) {
+                        selectedContentIndex = contentIndex
+
+                        if let formatIndex = selectedContent.formats.firstIndex(where: {
+                            $0.id == selectedFormat.id
+                        }) {
                             selectedFormatIndex = formatIndex
-                            break
                         }
                     }
-                } else if !contentGroups.isEmpty {
+                } else if !item.contents.isEmpty {
                     // Default selection
-                    selectedGroupIndex = 0
+                    selectedContentIndex = 0
                     selectedFormatIndex = 0
-                    monitor.selectedType = contentGroups[0].types[0]
+                    monitor.selectedContent = item.contents[0]
+                    monitor.selectedFormat = item.contents[0].formats[0]
                 }
             }
         } else {
@@ -700,53 +781,59 @@ struct ClipboardDetailView: View {
                     .font(.system(size: 48))
                     .foregroundColor(.secondary)
                     .padding(.bottom)
-                
+
                 Text("Select a clipboard item to view details")
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
-    
-    // Generate better, more specific tab labels for groups of data types
-    private func getGroupTabLabel(_ types: [ClipboardDataType]) -> String {
-        if types.count == 1 {
-            return types[0].typeName
+
+    // Generate better, more specific tab labels for content
+    private func getContentTabLabel(_ content: ClipboardContent) -> String {
+        if content.formats.count == 1 {
+            return content.formats[0].typeName
         }
-        
-        // For multiple formats with same content, create more specific labels
-        if types.first(where: { $0.canRenderAsText }) != nil {
+
+        // Create more specific labels for content with multiple formats
+        if content.canRenderAsText {
             // For text types, include the specific formats
-            let formatNames = types.prefix(2).map { $0.typeName.replacingOccurrences(of: " Text", with: "") }
-            let additionalCount = types.count > 2 ? " +\(types.count - 2)" : ""
+            let formatNames = content.formats.prefix(2).map {
+                $0.typeName.replacingOccurrences(of: " Text", with: "")
+            }
+            let additionalCount = content.formats.count > 2 ? " +\(content.formats.count - 2)" : ""
             return "Text (\(formatNames.joined(separator: "/"))\(additionalCount))"
-        } else if types.first(where: { $0.canRenderAsImage }) != nil {
+        } else if content.canRenderAsImage {
             // For image types, include the specific formats
-            let formatNames = types.prefix(2).map { $0.typeName.replacingOccurrences(of: " Image", with: "") }
-            let additionalCount = types.count > 2 ? " +\(types.count - 2)" : ""
+            let formatNames = content.formats.prefix(2).map {
+                $0.typeName.replacingOccurrences(of: " Image", with: "")
+            }
+            let additionalCount = content.formats.count > 2 ? " +\(content.formats.count - 2)" : ""
             return "Image (\(formatNames.joined(separator: "/"))\(additionalCount))"
         } else {
-            // For other types, include the first type name
-            let mainType = types[0].typeName
-            return "Data (\(mainType) +\(types.count - 1))"
+            // For other types, show data size
+            return "Data (\(content.data.count) bytes)"
         }
     }
-    
+
     @ViewBuilder
-    private func contentView(for dataType: ClipboardDataType, allFormats: [ClipboardDataType]) -> some View {
+    private func contentView(for content: ClipboardContent, selectedFormat: ClipboardFormat)
+        -> some View
+    {
         VStack {
             // Format selector (only show if multiple formats available)
-            if allFormats.count > 1 {
+            if content.formats.count > 1 {
                 Menu {
-                    ForEach(Array(allFormats.enumerated()), id: \.element.id) { index, format in
+                    ForEach(Array(content.formats.enumerated()), id: \.element.id) {
+                        index, format in
                         Button(format.typeName) {
                             selectedFormatIndex = index
-                            monitor.selectedType = format
+                            monitor.selectedFormat = format
                         }
                     }
                 } label: {
                     HStack {
-                        Text("Format: \(dataType.typeName)")
+                        Text("Format: \(selectedFormat.typeName)")
                         Image(systemName: "chevron.down")
                     }
                     .padding(.horizontal, 10)
@@ -757,37 +844,37 @@ struct ClipboardDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 8)
             }
-            
+
             // Preview section
             Group {
-                if dataType.canRenderAsText, let text = dataType.getTextRepresentation() {
+                if content.canRenderAsText, let text = content.getTextRepresentation() {
                     ScrollView {
                         Text(text)
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                } else if dataType.canRenderAsImage, let nsImage = NSImage(data: dataType.data) {
+                } else if content.canRenderAsImage, let nsImage = NSImage(data: content.data) {
                     // Use simplified PDFKit for image viewing with pinch-to-zoom
                     PDFImageView(image: nsImage)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack {
-                        Text("Binary data: \(dataType.data.count) bytes")
+                        Text("Binary data: \(content.data.count) bytes")
                             .foregroundColor(.secondary)
                             .padding()
-                        
+
                         // ASCII interpretation for small binary data
-                        if dataType.data.count < 1024 {
+                        if content.data.count < 1024 {
                             Divider()
-                            
+
                             VStack(alignment: .leading) {
                                 Text("ASCII Interpretation:")
                                     .font(.subheadline)
                                     .padding(.bottom, 4)
-                                
+
                                 ScrollView {
-                                    Text(asciiRepresentation(of: dataType.data))
+                                    Text(asciiRepresentation(of: content.data))
                                         .font(.system(.body, design: .monospaced))
                                         .textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -800,12 +887,15 @@ struct ClipboardDetailView: View {
             }
             .background(Color(NSColor.textBackgroundColor).opacity(0.5))
             .cornerRadius(6)
-            
-            // Simplified metadata section - no copy buttons, no "All formats" section
+
+            // Simplified metadata section
             VStack(alignment: .leading, spacing: 8) {
-                DetailRow(label: "Type", value: dataType.typeName)
-                DetailRow(label: "UTI", value: dataType.uti)
-                DetailRow(label: "Size", value: "\(dataType.data.count) bytes")
+                DetailRow(label: "Format", value: selectedFormat.typeName)
+                DetailRow(label: "UTI", value: selectedFormat.uti)
+                DetailRow(label: "Size", value: "\(content.data.count) bytes")
+                DetailRow(
+                    label: "Available Formats",
+                    value: content.formats.map { $0.typeName }.joined(separator: ", "))
             }
             .padding()
             .background(Color(NSColor.textBackgroundColor).opacity(0.3))
@@ -813,39 +903,40 @@ struct ClipboardDetailView: View {
         }
         .padding()
     }
-    
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
-    
+
     private func asciiRepresentation(of data: Data) -> String {
         var result = ""
         let bytes = [UInt8](data)
-        
+
         for (index, byte) in bytes.enumerated() {
             // Add newline every 16 bytes
             if index % 16 == 0 && index > 0 {
                 result += "\n"
             }
-            
+
             // Add readable character or dot for non-printable
             if byte >= 32 && byte <= 126 {
                 result += String(format: "%c", byte)
             } else {
                 result += "."
             }
-            
+
             // Add space between characters
             if index % 16 != 15 && index != bytes.count - 1 {
                 result += " "
             }
         }
-        
+
         return result
     }
 }
+
 struct DetailRow: View {
     let label: String
     let value: String
@@ -897,6 +988,7 @@ struct ContentView: View {
         }
     }
 }
+
 // MARK: - App
 
 /// Main application structure
