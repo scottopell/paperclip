@@ -9,7 +9,8 @@ jobs:
   build:
     runs-on: macos-latest
     permissions:
-      contents: write
+      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -23,21 +24,61 @@ jobs:
         run: |
           xcodebuild -scheme spaperclip -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO -derivedDataPath build
 
-          cd build/Build/Products/Release
-          zip -r spaperclip.zip spaperclip.app
+      - name: Remove Quarantine Attributes
+        run: |
+          # Remove extended attributes from the .app
+          xattr -cr build/Build/Products/Release/spaperclip.app
 
       - name: Create DMG
         run: |
           hdiutil create -volname "spaperclip" -srcfolder build/Build/Products/Release/spaperclip.app -ov -format UDZO spaperclip.dmg
 
+      - name: Upload App Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: spaperclip-app
+          path: build/Build/Products/Release/spaperclip.app
+          retention-days: 1
+
+      - name: Upload DMG Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: spaperclip-dmg
+          path: spaperclip.dmg
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download App Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: spaperclip-app
+          path: ./spaperclip.app
+
+      - name: Download DMG Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: spaperclip-dmg
+          path: ./
+
+      - name: Remove Quarantine Again (Safety)
+        run:
+          xattr -cr ./spaperclip.app
+
+      - name: Package App for Release
+        run: |
+          tar -czf spaperclip.tar.gz -C ./spaperclip.app .
+
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             spaperclip.dmg
-            build/Build/Products/Release/spaperclip.zip
+            spaperclip.tar.gz
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
