@@ -142,13 +142,13 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let changeCount: Int
     var contents: [ClipboardContent]
 
-    var textRepresentation: String {
+    var textRepresentation: String? {
         for content in contents {
             if let text = content.getTextRepresentation() {
                 return text
             }
         }
-        return "No text representation available"
+        return nil
     }
 
     var hasImageRepresentation: Bool {
@@ -224,22 +224,23 @@ class ClipboardMonitor: ObservableObject {
         selectedContent = nil
         selectedFormat = nil
     }
-    
+
     // MARK: - Selection Management
-    
+
     /// Selects a history item and updates content/format selections accordingly
     func selectHistoryItem(_ item: ClipboardHistoryItem?) {
         selectedHistoryItem = item
-        
+
         guard let item = item, !item.contents.isEmpty else {
             selectedContent = nil
             selectedFormat = nil
             return
         }
-        
+
         // If current content is in the new history item, keep it selected
         if let currentContent = selectedContent,
-           item.contents.contains(where: { $0.id == currentContent.id }) {
+            item.contents.contains(where: { $0.id == currentContent.id })
+        {
             // Content is still valid, keep it selected
         } else {
             // Default to text content if available, otherwise first content
@@ -250,19 +251,20 @@ class ClipboardMonitor: ObservableObject {
             }
         }
     }
-    
+
     /// Selects a content and updates format selection accordingly
     func selectContent(_ content: ClipboardContent?) {
         selectedContent = content
-        
+
         guard let content = content else {
             selectedFormat = nil
             return
         }
-        
+
         // If current format is in the new content, keep it selected
         if let currentFormat = selectedFormat,
-           content.formats.contains(where: { $0.id == currentFormat.id }) {
+            content.formats.contains(where: { $0.id == currentFormat.id })
+        {
             // Format is still valid, keep it selected
         } else {
             // Default to text format if available, otherwise first format
@@ -279,15 +281,16 @@ class ClipboardMonitor: ObservableObject {
             }
         }
     }
-    
+
     /// Selects a format, ensuring it belongs to the selected content
     func selectFormat(_ format: ClipboardFormat?) {
         guard let format = format,
-              let content = selectedContent,
-              content.formats.contains(where: { $0.id == format.id }) else {
+            let content = selectedContent,
+            content.formats.contains(where: { $0.id == format.id })
+        else {
             return
         }
-        
+
         selectedFormat = format
     }
 
@@ -389,7 +392,7 @@ class ClipboardMonitor: ObservableObject {
                 "UI updated with new clipboard content: \(contents.count) content groups")
         }
     }
-    
+
     /// Gets a valid content for the given history item, prioritizing text content
     func getDefaultContentForItem(_ item: ClipboardHistoryItem) -> ClipboardContent? {
         if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
@@ -397,7 +400,7 @@ class ClipboardMonitor: ObservableObject {
         }
         return item.contents.first
     }
-    
+
     /// Gets a valid format for the given content, prioritizing plain text formats
     func getDefaultFormatForContent(_ content: ClipboardContent) -> ClipboardFormat? {
         if content.canRenderAsText {
@@ -561,61 +564,59 @@ struct CurrentClipboardView: View {
 struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     @ObservedObject var monitor: ClipboardMonitor
-
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+            contentCard
+                .contentShape(Rectangle())
+                .contextMenu {
+                    contextMenu
+                }
+        }
+        
+        // MARK: - Component Parts
+        
+        private var contentCard: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                headerRow
+                
+                Divider()
+                    .padding(.vertical, 2)
+                
+                contentPreview
+            }
+            .padding(8)
+            .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
+            .cornerRadius(6)
+            .overlay(cardBorder)
+            .shadow(
+                color: monitor.selectedHistoryItem?.id == item.id
+                    ? Color.accentColor.opacity(0.3) : Color.clear,
+                radius: 4
+            )
+            .padding(.horizontal, 2)
+            .padding(.vertical, 2)
+        }
+        
+        private var headerRow: some View {
             HStack(spacing: 4) {
                 Text(formatDate(item.timestamp))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
-
+                
                 Spacer()
-
-                // Type indicators
-                HStack(spacing: 4) {
-                    if monitor.currentItemID == item.id {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
-                            .help("Current clipboard content")
-                    }
-
-                    if item.contents.contains(where: { $0.canRenderAsText }) {
-                        Image(systemName: "doc.text")
-                            .foregroundColor(.blue)
-                    }
-
-                    if item.contents.contains(where: { $0.canRenderAsImage }) {
-                        Image(systemName: "photo")
-                            .foregroundColor(.green)
-                    }
-
-                    let hasURL = item.contents.contains(where: {
-                        $0.formats.contains { format in
-                            format.uti.contains("url")
-                        }
-                    })
-
-                    if hasURL {
-                        Image(systemName: "link")
-                            .foregroundColor(.purple)
-                    }
-                }
+                
+                typeIndicators
             }
-
-            Divider()
-                .padding(.vertical, 2)
-
-            // Content preview
-            Text(truncateString(item.textRepresentation))
-                .lineLimit(2)
+        }
+        
+        private var contentPreview: some View {
+            Text(item.textRepresentation.map { truncateString($0) } ?? "(Unsupported format)")
                 .font(.system(.caption))
+                .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(8)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
-        .cornerRadius(6)
-        .overlay(
+        
+        private var cardBorder: some View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(
                     monitor.currentItemID == item.id
@@ -624,16 +625,41 @@ struct HistoryItemRow: View {
                             ? Color.accentColor.opacity(0.8) : Color.gray.opacity(0.3)),
                     lineWidth: monitor.selectedHistoryItem?.id == item.id ? 2 : 1
                 )
-        )
-        .shadow(
-            color: monitor.selectedHistoryItem?.id == item.id
-                ? Color.accentColor.opacity(0.3) : Color.clear,
-            radius: 4
-        )
-        .padding(.horizontal, 2)
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .contextMenu {
+        }
+
+    var typeIndicators: some View {
+        HStack(spacing: 4) {
+            if monitor.currentItemID == item.id {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+                    .help("Current clipboard content")
+            }
+
+            if item.contents.contains(where: { $0.canRenderAsText }) {
+                Image(systemName: "doc.text")
+                    .foregroundColor(.blue)
+            }
+
+            if item.contents.contains(where: { $0.canRenderAsImage }) {
+                Image(systemName: "photo")
+                    .foregroundColor(.green)
+            }
+
+            let hasURL = item.contents.contains(where: {
+                $0.formats.contains { format in
+                    format.uti.contains("url")
+                }
+            })
+
+            if hasURL {
+                Image(systemName: "link")
+                    .foregroundColor(.purple)
+            }
+        }
+    }
+    var contextMenu: some View {
+        HStack {
             ForEach(item.contents) { content in
                 if content.formats.count == 1 {
                     Button(content.formats[0].typeName) {
@@ -649,9 +675,9 @@ struct HistoryItemRow: View {
                     }
                 }
             }
-
+            
             Divider()
-
+            
             Button("Copy All Content Types") {
                 copyAllContentTypes(item)
             }
@@ -704,78 +730,143 @@ struct HistoryItemRow: View {
 
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
+    @State private var searchText: String = ""
+    @State private var debouncedSearchText: String = ""
+
+    // Add a timer publisher for debouncing
+    private let searchTextPublisher = PassthroughSubject<String, Never>()
+    @State private var cancellable: AnyCancellable?
+
+    var filteredHistory: [ClipboardHistoryItem] {
+        if debouncedSearchText.isEmpty {
+            return monitor.history
+        } else {
+            return monitor.history.filter { item in
+                guard let itemText = item.textRepresentation else {
+                    return false;
+                }
+                return itemText.localizedCaseInsensitiveContains(debouncedSearchText)
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Search field - always at the top
             HStack {
-                Text("History")
-                    .font(.headline)
-                
+                // Use NSSearchField for native macOS look and feel
+                SearchField(
+                    searchText: $searchText,
+                    placeholder: "Search clipboard history...",
+                    onSearchTextChanged: { newText in
+                        searchTextPublisher.send(newText)
+                    }
+                )
+
                 Spacer()
-                
+
                 Button(action: {
+                    searchText = ""
+                    searchTextPublisher.send("")
                     monitor.clearHistory()
                 }) {
-                    Image(systemName : "trash")
+                    Image(systemName: "trash")
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
                 .help("Clear History")
             }
+            .padding(.bottom, 4)
 
-            if monitor.history.isEmpty {
-                Text("No clipboard history yet. Copy something!")
-                    .italic()
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            // Always show the ScrollView container regardless of content
+            ScrollView {
+                if filteredHistory.isEmpty {
+                    VStack {
+                        if monitor.history.isEmpty {
+                            Text("No clipboard history yet. Copy something!")
+                                .italic()
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("No results matching '\(debouncedSearchText)'")
+                                .italic()
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 100)
                     .padding(4)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                ScrollView {
+                } else {
                     LazyVStack(spacing: 4) {
-                        ForEach(monitor.history) { item in
+                        ForEach(filteredHistory) { item in
                             HistoryItemRow(item: item, monitor: monitor)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    monitor.selectedHistoryItem = item
-
-                                    // Update the selected content when selecting a history item
-                                    if let textContent = item.contents.first(where: {
-                                        $0.canRenderAsText
-                                    }) {
-                                        monitor.selectedContent = textContent
-
-                                        // Update the selected format to text format if available
-                                        if let textFormat = textContent.formats.first(where: {
-                                            $0.uti == UTType.plainText.identifier
-                                                || $0.uti == "public.utf8-plain-text"
-                                        }) {
-                                            monitor.selectedFormat = textFormat
-                                        } else {
-                                            monitor.selectedFormat = textContent.formats.first
-                                        }
-                                    } else {
-                                        monitor.selectedContent = item.contents.first
-                                        monitor.selectedFormat = item.contents.first?.formats.first
-                                    }
+                                    monitor.selectHistoryItem(item)
                                 }
                         }
                     }
                     .padding(.vertical, 2)
                 }
-                .background(Color(NSColor.textBackgroundColor).opacity(0.3))
-                .cornerRadius(6)
+            }
+            .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+            .cornerRadius(6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)  // Align to top
+        .padding(4)
+        .onAppear {
+            // Setup the debounced search
+            cancellable =
+                searchTextPublisher
+                .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+                .sink { value in
+                    debouncedSearchText = value
+                }
+        }
+    }
+}
+// Native macOS search field wrapper
+struct SearchField: NSViewRepresentable {
+    @Binding var searchText: String
+    var placeholder: String
+    var onSearchTextChanged: (String) -> Void
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField()
+        searchField.placeholderString = placeholder
+        searchField.delegate = context.coordinator
+        return searchField
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        nsView.stringValue = searchText
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: SearchField
+
+        init(_ parent: SearchField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            if let searchField = notification.object as? NSSearchField {
+                let searchText = searchField.stringValue
+                parent.searchText = searchText
+                parent.onSearchTextChanged(searchText)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(4)
     }
 }
 
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
     let item: ClipboardHistoryItem?
-    
+
     var body: some View {
         if let item = item {
             VStack(spacing: 4) {
@@ -795,7 +886,7 @@ struct ClipboardDetailView: View {
                         .foregroundColor(.secondary)
 
                     Spacer()
-                    
+
                     Button(action: {
                         copyAllContentTypes(item)
                     }) {
@@ -817,14 +908,16 @@ struct ClipboardDetailView: View {
                                     HStack(spacing: 2) {
                                         contentTypeIcon(for: content)
                                             .font(.caption)
-                                        
+
                                         Text(getContentTabLabel(content))
                                             .font(.caption)
                                     }
                                     .padding(.vertical, 6)
                                     .padding(.horizontal, 8)
-                                    .background(monitor.selectedContent?.id == content.id ?
-                                                Color.accentColor.opacity(0.2) : Color.clear)
+                                    .background(
+                                        monitor.selectedContent?.id == content.id
+                                            ? Color.accentColor.opacity(0.2) : Color.clear
+                                    )
                                     .cornerRadius(4)
                                 }
                                 .buttonStyle(.plain)
@@ -833,33 +926,39 @@ struct ClipboardDetailView: View {
                         }
                         .padding(.bottom, 4)
                     }
-                    
+
                     // Format picker - only show if the selected content has multiple formats
-                    if let selectedContent = monitor.selectedContent, selectedContent.formats.count > 1 {
+                    if let selectedContent = monitor.selectedContent,
+                        selectedContent.formats.count > 1
+                    {
                         HStack {
                             Text("Format:")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            
-                            Picker("", selection: Binding<ClipboardFormat?>(
-                                get: { monitor.selectedFormat },
-                                set: { monitor.selectFormat($0) }
-                            )) {
+
+                            Picker(
+                                "",
+                                selection: Binding<ClipboardFormat?>(
+                                    get: { monitor.selectedFormat },
+                                    set: { monitor.selectFormat($0) }
+                                )
+                            ) {
                                 ForEach(selectedContent.formats) { format in
                                     Text(format.typeName).tag(format as ClipboardFormat?)
                                 }
                             }
                             .pickerStyle(.menu)
-                            
+
                             Spacer()
                         }
                         .padding(.horizontal, 8)
                         .padding(.bottom, 4)
                     }
-                    
+
                     // Content view
                     if let selectedContent = monitor.selectedContent,
-                       let selectedFormat = monitor.selectedFormat {
+                        let selectedFormat = monitor.selectedFormat
+                    {
                         contentView(for: selectedContent, selectedFormat: selectedFormat)
                     } else {
                         Text("No content selected")
@@ -894,7 +993,7 @@ struct ClipboardDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
-    
+
     @ViewBuilder
     private func contentTypeIcon(for content: ClipboardContent) -> some View {
         if content.canRenderAsText {
@@ -908,9 +1007,11 @@ struct ClipboardDetailView: View {
                 .foregroundColor(.gray)
         }
     }
-    
+
     @ViewBuilder
-    private func contentView(for content: ClipboardContent, selectedFormat: ClipboardFormat) -> some View {
+    private func contentView(for content: ClipboardContent, selectedFormat: ClipboardFormat)
+        -> some View
+    {
         VStack(spacing: 4) {
             // Preview section
             Group {
@@ -953,7 +1054,7 @@ struct ClipboardDetailView: View {
             }
             .background(Color(NSColor.textBackgroundColor).opacity(0.5))
             .cornerRadius(6)
-            
+
             // Integrated metadata section
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -966,7 +1067,7 @@ struct ClipboardDetailView: View {
                                 .font(.caption2)
                                 .textSelection(.enabled)
                         }
-                        
+
                         HStack {
                             Text("Size:")
                                 .font(.caption2)
@@ -975,18 +1076,19 @@ struct ClipboardDetailView: View {
                                 .font(.caption2)
                         }
                     }
-                    
+
                     Spacer()
-                    
+
                     // Show alternative formats as buttons
                     if content.formats.count > 1 {
                         VStack(alignment: .trailing) {
                             Text("Other formats:")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                            
+
                             HStack {
-                                ForEach(content.formats.filter { $0.id != selectedFormat.id }) { format in
+                                ForEach(content.formats.filter { $0.id != selectedFormat.id }) {
+                                    format in
                                     Button(format.typeName) {
                                         monitor.selectFormat(format)
                                     }
@@ -1063,7 +1165,7 @@ struct ClipboardDetailView: View {
 
         return result
     }
-    
+
     private func copyAllContentTypes(_ item: ClipboardHistoryItem) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
