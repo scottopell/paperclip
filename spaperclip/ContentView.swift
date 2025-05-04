@@ -545,7 +545,10 @@ struct PDFImageView: NSViewRepresentable {
         let view = PDFView()
         view.document = PDFDocument()
         
-        // Convert NSImage to PDFPage
+        // WARNING
+        /*
+         [Internal] Thread running at User-interactive quality-of-service class waiting on a lower QoS thread running at Background quality-of-service class. Investigate ways to avoid priority inversions
+         */
         if let page = PDFPage(image: image) {
             view.document?.insert(page, at: 0)
         }
