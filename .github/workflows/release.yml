@@ -34,14 +34,14 @@ jobs:
           hdiutil create -volname "spaperclip" -srcfolder build/Build/Products/Release/spaperclip.app -ov -format UDZO spaperclip.dmg
 
       - name: Upload App Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: spaperclip-app
           path: build/Build/Products/Release/spaperclip.app
           retention-days: 1
 
       - name: Upload DMG Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: spaperclip-dmg
           path: spaperclip.dmg
@@ -55,13 +55,13 @@ jobs:
 
     steps:
       - name: Download App Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: spaperclip-app
           path: ./spaperclip.app
 
       - name: Download DMG Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: spaperclip-dmg
           path: ./
