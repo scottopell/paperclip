@@ -6,13 +6,17 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
-    let item: ClipboardHistoryItem?
+
+    // Local state for content and format selection
+    @State private var selectedContent: ClipboardContent?
+    @State private var selectedFormat: ClipboardFormat?
 
     var body: some View {
-        if let item = item {
+        if let item = monitor.selectedHistoryItem {
             VStack(spacing: 4) {
                 // Header
                 HStack {
@@ -47,7 +51,7 @@ struct ClipboardDetailView: View {
                         HStack(spacing: 2) {
                             ForEach(item.contents) { content in
                                 Button(action: {
-                                    monitor.selectContent(content)
+                                    selectContent(content)
                                 }) {
                                     HStack(spacing: 2) {
                                         contentTypeIcon(for: content)
@@ -59,7 +63,7 @@ struct ClipboardDetailView: View {
                                     .padding(.vertical, 6)
                                     .padding(.horizontal, 8)
                                     .background(
-                                        monitor.selectedContent?.id == content.id
+                                        selectedContent?.id == content.id
                                             ? Color.accentColor.opacity(0.2) : Color.clear
                                     )
                                     .cornerRadius(4)
@@ -72,7 +76,7 @@ struct ClipboardDetailView: View {
                     }
 
                     // Format picker - only show if the selected content has multiple formats
-                    if let selectedContent = monitor.selectedContent,
+                    if let selectedContent = selectedContent,
                         selectedContent.formats.count > 1
                     {
                         HStack {
@@ -83,8 +87,8 @@ struct ClipboardDetailView: View {
                             Picker(
                                 "",
                                 selection: Binding<ClipboardFormat?>(
-                                    get: { monitor.selectedFormat },
-                                    set: { monitor.selectFormat($0) }
+                                    get: { selectedFormat },
+                                    set: { selectFormat($0) }
                                 )
                             ) {
                                 ForEach(selectedContent.formats) { format in
@@ -100,8 +104,8 @@ struct ClipboardDetailView: View {
                     }
 
                     // Content view
-                    if let selectedContent = monitor.selectedContent,
-                        let selectedFormat = monitor.selectedFormat
+                    if let selectedContent = selectedContent,
+                        let selectedFormat = selectedFormat
                     {
                         contentView(for: selectedContent, selectedFormat: selectedFormat)
                     } else {
@@ -116,14 +120,11 @@ struct ClipboardDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onAppear {
-                // Set the monitor's selected history item when the view appears
-                monitor.selectHistoryItem(item)
+            .onChange(of: monitor.selectedHistoryItem) { oldItem, newItem in
+                updateSelectionForItem(newItem)
             }
-            .onChange(of: item) { oldItem, newItem in
-                if monitor.selectedHistoryItem?.id != newItem.id {
-                    monitor.selectHistoryItem(newItem)
-                }
+            .onAppear {
+                updateSelectionForItem(item)
             }
         } else {
             VStack {
@@ -137,6 +138,73 @@ struct ClipboardDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
+    }
+
+    // MARK: - Selection Management
+
+    /// Updates selection when the selected history item changes
+    private func updateSelectionForItem(_ item: ClipboardHistoryItem?) {
+        guard let item = item, !item.contents.isEmpty else {
+            selectedContent = nil
+            selectedFormat = nil
+            return
+        }
+
+        // If current content is in the new history item, keep it selected
+        if let currentContent = selectedContent,
+            item.contents.contains(where: { $0.id == currentContent.id })
+        {
+            // Content is still valid, keep it selected
+        } else {
+            // Default to text content if available, otherwise first content
+            if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
+                selectContent(textContent)
+            } else {
+                selectContent(item.contents.first)
+            }
+        }
+    }
+
+    /// Selects a content and updates format selection accordingly
+    private func selectContent(_ content: ClipboardContent?) {
+        selectedContent = content
+
+        guard let content = content else {
+            selectedFormat = nil
+            return
+        }
+
+        // If current format is in the new content, keep it selected
+        if let currentFormat = selectedFormat,
+            content.formats.contains(where: { $0.id == currentFormat.id })
+        {
+            // Format is still valid, keep it selected
+        } else {
+            // Default to text format if available, otherwise first format
+            if content.canRenderAsText {
+                if let textFormat = content.formats.first(where: {
+                    $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+                }) {
+                    selectedFormat = textFormat
+                } else {
+                    selectedFormat = content.formats.first
+                }
+            } else {
+                selectedFormat = content.formats.first
+            }
+        }
+    }
+
+    /// Selects a format, ensuring it belongs to the selected content
+    private func selectFormat(_ format: ClipboardFormat?) {
+        guard let format = format,
+            let content = selectedContent,
+            content.formats.contains(where: { $0.id == format.id })
+        else {
+            return
+        }
+
+        selectedFormat = format
     }
 
     @ViewBuilder
@@ -240,7 +308,7 @@ struct ClipboardDetailView: View {
                                 ForEach(content.formats.filter { $0.id != selectedFormat.id }) {
                                     format in
                                     Button(format.typeName) {
-                                        monitor.selectFormat(format)
+                                        selectFormat(format)
                                     }
                                     .font(.caption2)
                                     .buttonStyle(.link)

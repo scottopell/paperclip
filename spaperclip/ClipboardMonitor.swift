@@ -345,8 +345,6 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
 class ClipboardMonitor: ObservableObject {
     @Published var currentItem: ClipboardHistoryItem?
     @Published var history: [ClipboardHistoryItem] = []
-    @Published var selectedContent: ClipboardContent?
-    @Published var selectedFormat: ClipboardFormat?
     @Published var selectedHistoryItem: ClipboardHistoryItem?
     @Published var currentItemID: UUID?
 
@@ -399,13 +397,11 @@ class ClipboardMonitor: ObservableObject {
     func clearHistory() {
         history.removeAll()
         selectedHistoryItem = nil
-        selectedContent = nil
-        selectedFormat = nil
     }
 
     // MARK: - Selection Management
 
-    /// Selects a history item and updates content/format selections accordingly
+    /// Selects a history item
     func selectHistoryItem(_ item: ClipboardHistoryItem?) {
         // Ensure UI updates happen on the main thread
         if !Thread.isMainThread {
@@ -416,83 +412,6 @@ class ClipboardMonitor: ObservableObject {
         }
 
         self.selectedHistoryItem = item
-        guard let item = item, !item.contents.isEmpty else {
-            selectedContent = nil
-            selectedFormat = nil
-            return
-        }
-
-        // If current content is in the new history item, keep it selected
-        if let currentContent = selectedContent,
-            item.contents.contains(where: { $0.id == currentContent.id })
-        {
-            // Content is still valid, keep it selected
-        } else {
-            // Default to text content if available, otherwise first content
-            if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
-                selectContent(textContent)
-            } else {
-                selectContent(item.contents.first)
-            }
-        }
-    }
-
-    /// Selects a content and updates format selection accordingly
-    func selectContent(_ content: ClipboardContent?) {
-        // Ensure UI updates happen on the main thread
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.selectContent(content)
-            }
-            return
-        }
-
-        selectedContent = content
-
-        guard let content = content else {
-            selectedFormat = nil
-            return
-        }
-
-        // If current format is in the new content, keep it selected
-        if let currentFormat = selectedFormat,
-            content.formats.contains(where: { $0.id == currentFormat.id })
-        {
-            // Format is still valid, keep it selected
-        } else {
-            // Default to text format if available, otherwise first format
-            if content.canRenderAsText {
-                if let textFormat = content.formats.first(where: {
-                    $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
-                }) {
-                    selectedFormat = textFormat
-                } else {
-                    selectedFormat = content.formats.first
-                }
-            } else {
-                selectedFormat = content.formats.first
-            }
-        }
-    }
-
-    /// Selects a format, ensuring it belongs to the selected content
-    func selectFormat(_ format: ClipboardFormat?) {
-        // Ensure UI updates happen on the main thread
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.selectFormat(format)
-            }
-            return
-        }
-
-        guard let format = format,
-            let content = selectedContent,
-            content.formats.contains(where: { $0.id == format.id })
-        else {
-            return
-        }
-
-        selectedFormat = format
     }
 
     private func checkClipboard() {
