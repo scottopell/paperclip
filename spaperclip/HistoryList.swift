@@ -4,6 +4,12 @@
 //
 //  Created by Scott Opell on 5/4/25.
 //
+// TODO add support for using arrow up/down keys to
+// select different elements in the HistoryList and
+// have the "enter" action be to re-copy all content
+// types. have shift+enter be to re-copy only the
+// plain text, if there is no plain text then
+// do not put anything on the clipboard
 
 import SwiftUI
 import Combine
