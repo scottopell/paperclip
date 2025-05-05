@@ -1,10 +1,10 @@
-// swift-tools-version:5.7
+// swift-tools-version:5.9
 import PackageDescription
 
 let package = Package(
     name: "spaperclip",
     platforms: [
-        .macOS(.v12)
+        .macOS(.v14)
     ],
     products: [
         .executable(name: "spaperclip", targets: ["spaperclip"])
@@ -13,7 +13,17 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "spaperclip",
-            path: "spaperclip"
-        )
+            path: "spaperclip",
+            resources: [
+                .process("Assets.xcassets"),
+                .process("Preview Content"),
+                .process("spaperclip.entitlements"),
+            ]
+        ),
+        .testTarget(
+            name: "spaperclipTests",
+            dependencies: ["spaperclip"],
+            path: "spaperclipTests"
+        ),
     ]
 )

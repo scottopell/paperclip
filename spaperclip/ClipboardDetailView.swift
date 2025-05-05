@@ -120,7 +120,7 @@ struct ClipboardDetailView: View {
                 // Set the monitor's selected history item when the view appears
                 monitor.selectHistoryItem(item)
             }
-            .onChange(of: item) { newItem in
+            .onChange(of: item) { oldItem, newItem in
                 if monitor.selectedHistoryItem?.id != newItem.id {
                     monitor.selectHistoryItem(newItem)
                 }

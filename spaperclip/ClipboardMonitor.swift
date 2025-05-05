@@ -141,31 +141,53 @@ struct ClipboardContent: Identifiable, Hashable {
     /// - Parameters:
     ///   - offset: Character offset from the beginning
     ///   - length: Maximum length to read in characters
-    /// - Returns: String containing the requested chunk, or nil if not possible
-    func getTextChunk(offset: Int, length: Int) -> String? {
+    /// - Returns: Tuple containing the requested chunk and the next offset to use for subsequent requests
+    func getTextChunk(offset: Int, length: Int) -> (text: String, nextOffset: Int)? {
         // For plain text format
         if formats.first(where: {
             $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
         }) != nil {
             // For very small texts, just load the whole thing
             if data.count < 100_000 {
-                return String(data: data, encoding: .utf8)
+                if let fullText = String(data: data, encoding: .utf8) {
+                    let endOffset = min(offset + length, fullText.count)
+                    let startIndex =
+                        fullText.index(
+                            fullText.startIndex, offsetBy: offset, limitedBy: fullText.endIndex)
+                        ?? fullText.endIndex
+                    let endIndex =
+                        fullText.index(
+                            fullText.startIndex, offsetBy: endOffset, limitedBy: fullText.endIndex)
+                        ?? fullText.endIndex
+                    return (String(fullText[startIndex..<endIndex]), endOffset)
+                }
+                return nil
             }
 
-            // For larger texts, try to load just the chunk
-            // This is an approximation as bytes != characters for many encodings
+            // For larger texts, load a bit more than requested to ensure we find clean boundaries
             let encoding = detectTextEncoding() ?? .utf8
-            let bytesPerChar = encoding.characterWidth
+            let avgBytesPerChar = encoding.characterWidth
+            let startByte = min(offset * avgBytesPerChar, data.count)
+            let extraBytes = 16  // Buffer to ensure we don't cut characters
+            let loadBytes = min(length * avgBytesPerChar + extraBytes, data.count - startByte)
 
-            // Calculate byte range (approximate)
-            let startByte = min(offset * bytesPerChar, data.count)
-            let maxBytes = min(length * bytesPerChar, data.count - startByte)
-
-            // Extract data chunk
-            let chunkData = data.subdata(in: startByte..<(startByte + maxBytes))
+            // Extract data chunk with extra bytes for safety
+            let chunkData = data.subdata(in: startByte..<(startByte + loadBytes))
 
             // Convert to string
-            return String(data: chunkData, encoding: encoding)
+            if var chunkText = String(data: chunkData, encoding: encoding) {
+                // Limit to requested length in characters
+                if chunkText.count > length {
+                    let endIndex =
+                        chunkText.index(
+                            chunkText.startIndex, offsetBy: length, limitedBy: chunkText.endIndex)
+                        ?? chunkText.endIndex
+                    chunkText = String(chunkText[..<endIndex])
+                }
+
+                // Return the text and the next offset
+                return (chunkText, offset + chunkText.count)
+            }
         }
         // Then try RTF format - cannot do partial loading, so load all for small files
         else if formats.first(where: {
@@ -177,13 +199,12 @@ struct ClipboardContent: Identifiable, Hashable {
             {
                 let string = attributedString.string
                 // Apply offset and length if string is loaded successfully
-                let endIndex = min(offset + length, string.count)
+                let endOffset = min(offset + length, string.count)
                 if offset < string.count {
                     let startIndex = string.index(string.startIndex, offsetBy: offset)
-                    let endIndex = string.index(string.startIndex, offsetBy: endIndex)
-                    return String(string[startIndex..<endIndex])
+                    let endIndex = string.index(string.startIndex, offsetBy: endOffset)
+                    return (String(string[startIndex..<endIndex]), endOffset)
                 }
-                return nil
             }
         }
         // Then try HTML format - cannot do partial loading, so load all for small files
@@ -196,20 +217,26 @@ struct ClipboardContent: Identifiable, Hashable {
             {
                 let string = attributedString.string
                 // Apply offset and length
-                let endIndex = min(offset + length, string.count)
+                let endOffset = min(offset + length, string.count)
                 if offset < string.count {
                     let startIndex = string.index(string.startIndex, offsetBy: offset)
-                    let endIndex = string.index(string.startIndex, offsetBy: endIndex)
-                    return String(string[startIndex..<endIndex])
+                    let endIndex = string.index(string.startIndex, offsetBy: endOffset)
+                    return (String(string[startIndex..<endIndex]), endOffset)
                 }
-                return nil
             }
         }
         // Try URL format
         else if formats.first(where: {
             $0.uti == UTType.url.identifier || $0.uti == "public.url"
         }) != nil {
-            return String(data: data, encoding: .utf8)
+            if let urlString = String(data: data, encoding: .utf8) {
+                let endOffset = min(offset + length, urlString.count)
+                if offset < urlString.count {
+                    let startIndex = urlString.index(urlString.startIndex, offsetBy: offset)
+                    let endIndex = urlString.index(urlString.startIndex, offsetBy: endOffset)
+                    return (String(urlString[startIndex..<endIndex]), endOffset)
+                }
+            }
         }
         return nil
     }
@@ -255,8 +282,8 @@ struct ClipboardContent: Identifiable, Hashable {
             return nil
         } else {
             // For large texts, get a preview with size information
-            if let previewText = getTextChunk(offset: 0, length: 1000) {
-                return previewText
+            if let chunkResult = getTextChunk(offset: 0, length: 1000) {
+                return chunkResult.text
                     + "\n\n[Large text: ~\(formatTextSize(getTextSize() ?? data.count)) characters]"
             } else {
                 return nil

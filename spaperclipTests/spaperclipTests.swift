@@ -5,13 +5,15 @@
 //  Created by Scott Opell on 5/3/25.
 //
 
-import Testing
+import XCTest
+
 @testable import spaperclip
 
-struct spaperclipTests {
+final class spaperclipTests: XCTestCase {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    func testExample() async throws {
+        // Example test
+        XCTAssertTrue(true)
     }
 
 }
