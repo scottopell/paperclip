@@ -284,21 +284,10 @@ struct ClipboardContent: Identifiable, Hashable {
             // For large texts, get a preview with size information
             if let chunkResult = getTextChunk(offset: 0, length: 1000) {
                 return chunkResult.text
-                    + "\n\n[Large text: ~\(formatTextSize(getTextSize() ?? data.count)) characters]"
+                    + "\n\n[Large text: ~\(Utilities.formatSize(getTextSize() ?? data.count)) characters]"
             } else {
                 return nil
             }
-        }
-    }
-
-    /// Format text size with appropriate units
-    private func formatTextSize(_ size: Int) -> String {
-        if size < 1_000 {
-            return "\(size)"
-        } else if size < 1_000_000 {
-            return String(format: "%.1fK", Double(size) / 1_000)
-        } else {
-            return String(format: "%.1fM", Double(size) / 1_000_000)
         }
     }
 

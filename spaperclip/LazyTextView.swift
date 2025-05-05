@@ -155,7 +155,7 @@ struct LazyTextView: NSViewRepresentable {
                 // Add a loading indicator
                 if estimatedSize > chunkSize {
                     let loadingText =
-                        "\n\n[Loading... \(Int((Double(offset) / Double(estimatedSize)) * 100))% of ~\(formatTextSize(estimatedSize)) characters]"
+                        "\n\n[Loading... \(Int((Double(offset) / Double(estimatedSize)) * 100))% of ~\(Utilities.formatSize(estimatedSize)) characters]"
                     textView.string += loadingText
                 }
             }
@@ -198,7 +198,7 @@ struct LazyTextView: NSViewRepresentable {
                     if nextOffset < estimatedSize {
                         let updatedText =
                             newText
-                            + "\n\n[Loading... \(Int(progress * 100))% of ~\(formatTextSize(estimatedSize)) characters]"
+                            + "\n\n[Loading... \(Int(progress * 100))% of ~\(Utilities.formatSize(estimatedSize)) characters]"
                         textView.string = updatedText
                     } else {
                         textView.string = newText
@@ -214,17 +214,6 @@ struct LazyTextView: NSViewRepresentable {
 
             // Small delay to prevent UI blocking
             Thread.sleep(forTimeInterval: 0.05)
-        }
-    }
-
-    // Helper to format text size
-    private func formatTextSize(_ size: Int) -> String {
-        if size < 1_000 {
-            return "\(size)"
-        } else if size < 1_000_000 {
-            return String(format: "%.1fK", Double(size) / 1_000)
-        } else {
-            return String(format: "%.1fM", Double(size) / 1_000_000)
         }
     }
 

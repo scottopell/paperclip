@@ -29,14 +29,14 @@ struct ClipboardDetailView: View {
                             .foregroundColor(.green)
                     }
 
-                    Text(formatDate(item.timestamp))
+                    Text(Utilities.formatDate(item.timestamp))
                         .font(.caption)
                         .foregroundColor(.secondary)
 
                     Spacer()
 
                     Button(action: {
-                        copyAllContentTypes(item)
+                        Utilities.copyAllContentTypes(from: item)
                     }) {
                         Image(systemName: "doc.on.doc")
                     }
@@ -285,7 +285,7 @@ struct ClipboardDetailView: View {
                                 .foregroundColor(.secondary)
                             if content.canRenderAsText, let textSize = content.getTextSize() {
                                 Text(
-                                    "\(content.data.count) bytes / ~\(formatSizeWithUnits(textSize)) characters"
+                                    "\(content.data.count) bytes / ~\(Utilities.formatSize(textSize)) characters"
                                 )
                                 .font(.caption2)
                             } else {
@@ -352,12 +352,6 @@ struct ClipboardDetailView: View {
         }
     }
 
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
-    }
-
     private func asciiRepresentation(of data: Data) -> String {
         var result = ""
         let bytes = [UInt8](data)
@@ -382,26 +376,5 @@ struct ClipboardDetailView: View {
         }
 
         return result
-    }
-
-    private func formatSizeWithUnits(_ size: Int) -> String {
-        if size < 1_000 {
-            return "\(size)"
-        } else if size < 1_000_000 {
-            return String(format: "%.1fK", Double(size) / 1_000)
-        } else {
-            return String(format: "%.1fM", Double(size) / 1_000_000)
-        }
-    }
-
-    private func copyAllContentTypes(_ item: ClipboardHistoryItem) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-
-        for content in item.contents {
-            for format in content.formats {
-                pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
-            }
-        }
     }
 }

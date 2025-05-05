@@ -39,7 +39,7 @@ struct HistoryItemRow: View {
 
     private var headerRow: some View {
         HStack(spacing: 4) {
-            Text(formatDate(item.timestamp))
+            Text(Utilities.formatDate(item.timestamp))
                 .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
 
@@ -50,7 +50,7 @@ struct HistoryItemRow: View {
     }
 
     private var contentPreview: some View {
-        Text(item.textRepresentation.map { truncateString($0) } ?? "(Unsupported format)")
+        Text(item.textRepresentation.map { $0.truncated() } ?? "(Unsupported format)")
             .font(.system(.caption))
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -103,13 +103,13 @@ struct HistoryItemRow: View {
             ForEach(item.contents) { content in
                 if content.formats.count == 1 {
                     Button(content.formats[0].typeName) {
-                        copyToClipboard(content)
+                        Utilities.copyToClipboard(content)
                     }
                 } else {
                     Menu(getContentMenuLabel(content)) {
                         ForEach(content.formats) { format in
                             Button(format.typeName) {
-                                copyToClipboard(content)
+                                Utilities.copyToClipboard(content)
                             }
                         }
                     }
@@ -119,7 +119,7 @@ struct HistoryItemRow: View {
             Divider()
 
             Button("Copy All Content Types") {
-                copyAllContentTypes(item)
+                Utilities.copyAllContentTypes(from: item)
             }
         }
     }
@@ -134,38 +134,6 @@ struct HistoryItemRow: View {
         }
     }
 
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
-    }
-
-    private func truncateString(_ str: String) -> String {
-        if str.count > 100 {
-            return String(str.prefix(100)) + "..."
-        }
-        return str
-    }
-
-    private func copyToClipboard(_ content: ClipboardContent) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-
-        for format in content.formats {
-            pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
-        }
-    }
-
-    private func copyAllContentTypes(_ item: ClipboardHistoryItem) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-
-        for content in item.contents {
-            for format in content.formats {
-                pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
-            }
-        }
-    }
 }
 
 struct ContentView: View {
