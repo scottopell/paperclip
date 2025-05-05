@@ -1,84 +1,28 @@
-name: Build and Release
-
+name: Create Release
 on:
   push:
     tags:
       - 'v*'
-
 jobs:
-  build:
-    runs-on: macos-latest
+  release:
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Build App
-        run: |
-          xcodebuild -scheme spaperclip -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO -derivedDataPath build
-
-      - name: Remove Quarantine Attributes
-        run: |
-          # Remove extended attributes from the .app
-          xattr -cr build/Build/Products/Release/spaperclip.app
-
-      - name: Create DMG
-        run: |
-          hdiutil create -volname "spaperclip" -srcfolder build/Build/Products/Release/spaperclip.app -ov -format UDZO spaperclip.dmg
-
-      - name: Upload App Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: spaperclip-app
-          path: build/Build/Products/Release/spaperclip.app
-          retention-days: 1
-
-      - name: Upload DMG Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: spaperclip-dmg
-          path: spaperclip.dmg
-          retention-days: 1
-
-  release:
-    needs: build
-    runs-on: macos-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download App Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: spaperclip-app
-          path: ./spaperclip.app
-
-      - name: Download DMG Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: spaperclip-dmg
-          path: ./
-
-      - name: Remove Quarantine Again (Safety)
-        run:
-          xattr -cr ./spaperclip.app
-
-      - name: Package App for Release
-        run: |
-          tar -czf spaperclip.tar.gz -C ./spaperclip.app .
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            spaperclip.dmg
-            spaperclip.tar.gz
-          draft: false
+          draft: true
           prerelease: false
+          body: |
+            ## spaperclip Release
+
+            ### Manual Upload Required
+            This is a placeholder release. App artifacts will be uploaded manually.
+
+            ### Instructions
+            1. Build the app locally using Xcode
+            2. Create DMG file
+            3. Upload both the app and DMG to this release
