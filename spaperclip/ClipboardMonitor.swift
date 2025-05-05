@@ -242,7 +242,7 @@ class ClipboardMonitor: ObservableObject {
                 selectedFormat = nil
                 return
             }
-            
+
             // If current content is in the new history item, keep it selected
             if let currentContent = selectedContent,
                item.contents.contains(where: { $0.id == currentContent.id })
@@ -264,12 +264,12 @@ class ClipboardMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             selectedContent = content
-            
+
             guard let content = content else {
                 selectedFormat = nil
                 return
             }
-            
+
             // If current format is in the new content, keep it selected
             if let currentFormat = selectedFormat,
                content.formats.contains(where: { $0.id == currentFormat.id })
@@ -302,7 +302,7 @@ class ClipboardMonitor: ObservableObject {
             else {
                 return
             }
-            
+
             selectedFormat = format
         }
     }
@@ -319,7 +319,7 @@ class ClipboardMonitor: ObservableObject {
             }
         }
     }
-    
+
     private func updateFromClipboard() {
         let pasteboard = NSPasteboard.general
 
@@ -426,6 +426,23 @@ class ClipboardMonitor: ObservableObject {
             }
         }
         return content.formats.first
+    }
+
+    /// Copies only the plain text representation of a history item to the clipboard
+    func copyPlainTextOnly(_ item: ClipboardHistoryItem) {
+        guard let textRepresentation = item.textRepresentation else {
+            logger.warning("Cannot copy plain text: no text representation available")
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(textRepresentation, forType: .string)
+
+        logger.info("Copied plain text only from history item")
+
+        // Update the last change count to prevent the monitor from picking up this change
+        lastChangeCount = pasteboard.changeCount
     }
 
     deinit {

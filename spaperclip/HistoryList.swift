@@ -3,17 +3,11 @@
 //  spaperclip
 //
 //  Created by Scott Opell on 5/4/25.
-//
-// TODO add support for using arrow up/down keys to
-// select different elements in the HistoryList and
-// have the "enter" action be to re-copy all content
-// types. have shift+enter be to re-copy only the
-// plain text, if there is no plain text then
-// do not put anything on the clipboard
 
-import SwiftUI
 import Combine
+import SwiftUI
 
+@available(macOS 14.0, *)
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @State private var searchText: String = ""
@@ -29,11 +23,49 @@ struct HistoryListView: View {
         } else {
             return monitor.history.filter { item in
                 guard let itemText = item.textRepresentation else {
-                    return false;
+                    return false
                 }
                 return itemText.localizedCaseInsensitiveContains(debouncedSearchText)
             }
         }
+    }
+
+    // Get the selected item directly from the monitor
+    private var selectedItem: ClipboardHistoryItem? {
+        return monitor.selectedHistoryItem
+    }
+
+    // Get the previous item in the filtered history
+    private var previousItem: ClipboardHistoryItem? {
+        guard let currentItem = selectedItem,
+            let currentIndex = filteredHistory.firstIndex(where: { $0.id == currentItem.id }),
+            currentIndex > 0
+        else {
+            return nil
+        }
+        return filteredHistory[currentIndex - 1]
+    }
+
+    // Get the next item in the filtered history
+    private var nextItem: ClipboardHistoryItem? {
+        guard let currentItem = selectedItem,
+            let currentIndex = filteredHistory.firstIndex(where: { $0.id == currentItem.id }),
+            currentIndex < filteredHistory.count - 1
+        else {
+            return nil
+        }
+        return filteredHistory[currentIndex + 1]
+    }
+
+    // Select a specific item directly using monitor
+    private func selectItem(_ item: ClipboardHistoryItem) {
+        monitor.selectHistoryItem(item)
+    }
+
+    // Select first item in the list
+    private func selectFirstItem() {
+        guard let firstItem = filteredHistory.first else { return }
+        selectItem(firstItem)
     }
 
     var body: some View {
@@ -84,9 +116,15 @@ struct HistoryListView: View {
                     .padding(4)
                 } else {
                     LazyVStack(spacing: 4) {
-                        ForEach(filteredHistory) { item in
+                        ForEach(Array(filteredHistory.enumerated()), id: \.element.id) {
+                            index, item in
                             HistoryItemRow(item: item, monitor: monitor)
                                 .contentShape(Rectangle())
+                                .background(
+                                    monitor.selectedHistoryItem?.id == item.id
+                                        ? Color.accentColor.opacity(0.2) : Color.clear
+                                )
+                                .cornerRadius(4)
                                 .onTapGesture {
                                     monitor.selectHistoryItem(item)
                                 }
@@ -107,7 +145,55 @@ struct HistoryListView: View {
                 .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
                 .sink { value in
                     debouncedSearchText = value
+                    // Reset selection when search changes
+                    if !filteredHistory.isEmpty {
+                        selectFirstItem()
+                    } else {
+                        monitor.selectHistoryItem(nil)
+                    }
                 }
+
+            // Initialize selection if history is not empty
+            if !filteredHistory.isEmpty && monitor.selectedHistoryItem == nil {
+                selectFirstItem()
+            }
+        }
+        .onKeyPress(.upArrow) {
+            if let prevItem = previousItem {
+                selectItem(prevItem)
+                return .handled
+            } else if !filteredHistory.isEmpty && selectedItem == nil {
+                selectFirstItem()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if let nextItem = nextItem {
+                selectItem(nextItem)
+                return .handled
+            } else if !filteredHistory.isEmpty && selectedItem == nil {
+                selectFirstItem()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.return) {
+            // TODO confirm this works, I'm not seeing any clipboard updates
+            guard let item = selectedItem else {
+                return .ignored
+            }
+
+            if NSEvent.modifierFlags.contains(.shift) {
+                // Shift+Enter: Copy only plain text if available
+                if item.textRepresentation != nil {
+                    monitor.copyPlainTextOnly(item)
+                }
+            } else {
+                // Enter: Copy all content types
+                monitor.selectHistoryItem(item)
+            }
+            return .handled
         }
     }
 }
