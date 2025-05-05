@@ -160,13 +160,11 @@ struct ClipboardDetailView: View {
         VStack(spacing: 4) {
             // Preview section
             Group {
-                if content.canRenderAsText, let text = content.getTextRepresentation() {
-                    ScrollView {
-                        Text(text)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
+                if content.canRenderAsText {
+                    // Use LazyTextView for text content instead of Text
+                    // This handles massive text content much more efficiently
+                    LazyTextView(content: content, isEditable: false)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if content.canRenderAsImage, let nsImage = NSImage(data: content.data) {
                     PDFImageView(image: nsImage)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -217,8 +215,15 @@ struct ClipboardDetailView: View {
                             Text("Size:")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                            Text("\(content.data.count) bytes")
+                            if content.canRenderAsText, let textSize = content.getTextSize() {
+                                Text(
+                                    "\(content.data.count) bytes / ~\(formatSizeWithUnits(textSize)) characters"
+                                )
                                 .font(.caption2)
+                            } else {
+                                Text("\(content.data.count) bytes")
+                                    .font(.caption2)
+                            }
                         }
                     }
 
@@ -309,6 +314,16 @@ struct ClipboardDetailView: View {
         }
 
         return result
+    }
+
+    private func formatSizeWithUnits(_ size: Int) -> String {
+        if size < 1_000 {
+            return "\(size)"
+        } else if size < 1_000_000 {
+            return String(format: "%.1fK", Double(size) / 1_000)
+        } else {
+            return String(format: "%.1fM", Double(size) / 1_000_000)
+        }
     }
 
     private func copyAllContentTypes(_ item: ClipboardHistoryItem) {

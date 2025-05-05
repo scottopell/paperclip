@@ -6,8 +6,8 @@
 //
 
 import SwiftUI
-import os
 import UniformTypeIdentifiers
+import os
 
 // MARK: - Models
 
@@ -61,6 +61,13 @@ struct ClipboardContent: Identifiable, Hashable {
     var formats: [ClipboardFormat]
     let description: String
 
+    // Explicit initializer
+    init(data: Data, formats: [ClipboardFormat], description: String) {
+        self.data = data
+        self.formats = formats
+        self.description = description
+    }
+
     var isPreviewable: Bool {
         return canRenderAsText || canRenderAsImage
     }
@@ -92,42 +99,180 @@ struct ClipboardContent: Identifiable, Hashable {
         return formats.contains { imageTypes.contains($0.uti) }
     }
 
-    func getTextRepresentation() -> String? {
-        // Try to get text from plain text format first
-        if let textFormat = formats.first(where: {
+    /// Returns approximate text size in characters without loading the entire content
+    func getTextSize() -> Int? {
+        // For plain text, estimate based on data size
+        if formats.first(where: {
             $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
-        }) {
-            return String(data: data, encoding: .utf8)
+        }) != nil {
+            // Probe the encoding and size without loading the entire string
+            if let encoding = detectTextEncoding() {
+                // Estimate size based on encoding
+                let estimatedSize = data.count / encoding.characterWidth
+                return estimatedSize
+            }
         }
-        // Then try RTF format
-        else if let rtfFormat = formats.first(where: {
+
+        // For RTF or HTML, we'd need to load it, which defeats the purpose of lazy loading
+        // So we'll just return the data size as an approximation
+        return data.count
+    }
+
+    /// Detects the most likely text encoding of the data
+    private func detectTextEncoding() -> String.Encoding? {
+        // Try UTF-8 first (most common)
+        if String(data: data.prefix(min(1024, data.count)), encoding: .utf8) != nil {
+            return .utf8
+        }
+        // Then UTF-16
+        if String(data: data.prefix(min(1024, data.count)), encoding: .utf16) != nil {
+            return .utf16
+        }
+        // Then ASCII
+        if String(data: data.prefix(min(1024, data.count)), encoding: .ascii) != nil {
+            return .ascii
+        }
+
+        // Default to UTF-8 if we can't determine
+        return .utf8
+    }
+
+    /// Gets a chunk of text at specified position with specified length
+    /// - Parameters:
+    ///   - offset: Character offset from the beginning
+    ///   - length: Maximum length to read in characters
+    /// - Returns: String containing the requested chunk, or nil if not possible
+    func getTextChunk(offset: Int, length: Int) -> String? {
+        // For plain text format
+        if formats.first(where: {
+            $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+        }) != nil {
+            // For very small texts, just load the whole thing
+            if data.count < 100_000 {
+                return String(data: data, encoding: .utf8)
+            }
+
+            // For larger texts, try to load just the chunk
+            // This is an approximation as bytes != characters for many encodings
+            let encoding = detectTextEncoding() ?? .utf8
+            let bytesPerChar = encoding.characterWidth
+
+            // Calculate byte range (approximate)
+            let startByte = min(offset * bytesPerChar, data.count)
+            let maxBytes = min(length * bytesPerChar, data.count - startByte)
+
+            // Extract data chunk
+            let chunkData = data.subdata(in: startByte..<(startByte + maxBytes))
+
+            // Convert to string
+            return String(data: chunkData, encoding: encoding)
+        }
+        // Then try RTF format - cannot do partial loading, so load all for small files
+        else if formats.first(where: {
             $0.uti == UTType.rtf.identifier || $0.uti == "public.rtf"
-        }) {
+        }) != nil, data.count < 500_000 {
             if let attributedString = try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil)
             {
-                return attributedString.string
+                let string = attributedString.string
+                // Apply offset and length if string is loaded successfully
+                let endIndex = min(offset + length, string.count)
+                if offset < string.count {
+                    let startIndex = string.index(string.startIndex, offsetBy: offset)
+                    let endIndex = string.index(string.startIndex, offsetBy: endIndex)
+                    return String(string[startIndex..<endIndex])
+                }
+                return nil
             }
         }
-        // Then try HTML format
-        else if let htmlFormat = formats.first(where: {
+        // Then try HTML format - cannot do partial loading, so load all for small files
+        else if formats.first(where: {
             $0.uti == UTType.html.identifier || $0.uti == "public.html"
-        }) {
+        }) != nil, data.count < 500_000 {
             if let attributedString = try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.html],
                 documentAttributes: nil)
             {
-                return attributedString.string
+                let string = attributedString.string
+                // Apply offset and length
+                let endIndex = min(offset + length, string.count)
+                if offset < string.count {
+                    let startIndex = string.index(string.startIndex, offsetBy: offset)
+                    let endIndex = string.index(string.startIndex, offsetBy: endIndex)
+                    return String(string[startIndex..<endIndex])
+                }
+                return nil
             }
         }
         // Try URL format
-        else if let urlFormat = formats.first(where: {
+        else if formats.first(where: {
             $0.uti == UTType.url.identifier || $0.uti == "public.url"
-        }) {
+        }) != nil {
             return String(data: data, encoding: .utf8)
         }
         return nil
+    }
+
+    /// Gets the entire text representation if possible (backward compatibility)
+    func getTextRepresentation() -> String? {
+        // For small texts, just load directly
+        if data.count < 100_000 {
+            // Try to get text from plain text format first
+            if formats.first(where: {
+                $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+            }) != nil {
+                return String(data: data, encoding: .utf8)
+            }
+            // Then try RTF format
+            else if formats.first(where: {
+                $0.uti == UTType.rtf.identifier || $0.uti == "public.rtf"
+            }) != nil {
+                if let attributedString = try? NSAttributedString(
+                    data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
+                    documentAttributes: nil)
+                {
+                    return attributedString.string
+                }
+            }
+            // Then try HTML format
+            else if formats.first(where: {
+                $0.uti == UTType.html.identifier || $0.uti == "public.html"
+            }) != nil {
+                if let attributedString = try? NSAttributedString(
+                    data: data, options: [.documentType: NSAttributedString.DocumentType.html],
+                    documentAttributes: nil)
+                {
+                    return attributedString.string
+                }
+            }
+            // Try URL format
+            else if formats.first(where: {
+                $0.uti == UTType.url.identifier || $0.uti == "public.url"
+            }) != nil {
+                return String(data: data, encoding: .utf8)
+            }
+            return nil
+        } else {
+            // For large texts, get a preview with size information
+            if let previewText = getTextChunk(offset: 0, length: 1000) {
+                return previewText
+                    + "\n\n[Large text: ~\(formatTextSize(getTextSize() ?? data.count)) characters]"
+            } else {
+                return nil
+            }
+        }
+    }
+
+    /// Format text size with appropriate units
+    private func formatTextSize(_ size: Int) -> String {
+        if size < 1_000 {
+            return "\(size)"
+        } else if size < 1_000_000 {
+            return String(format: "%.1fK", Double(size) / 1_000)
+        } else {
+            return String(format: "%.1fM", Double(size) / 1_000_000)
+        }
     }
 
     func hash(into hasher: inout Hasher) {
@@ -210,7 +355,8 @@ class ClipboardMonitor: ObservableObject {
 
     func startMonitoring() {
         DispatchQueue.main.async { [weak self] in
-            self?.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
+                [weak self] _ in
                 self?.checkClipboard()
             }
         }
@@ -234,77 +380,92 @@ class ClipboardMonitor: ObservableObject {
 
     /// Selects a history item and updates content/format selections accordingly
     func selectHistoryItem(_ item: ClipboardHistoryItem?) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.selectedHistoryItem = item
-            guard let item = item, !item.contents.isEmpty else {
-                selectedContent = nil
-                selectedFormat = nil
-                return
+        // Ensure UI updates happen on the main thread
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectHistoryItem(item)
             }
+            return
+        }
 
-            // If current content is in the new history item, keep it selected
-            if let currentContent = selectedContent,
-               item.contents.contains(where: { $0.id == currentContent.id })
-            {
-                // Content is still valid, keep it selected
+        self.selectedHistoryItem = item
+        guard let item = item, !item.contents.isEmpty else {
+            selectedContent = nil
+            selectedFormat = nil
+            return
+        }
+
+        // If current content is in the new history item, keep it selected
+        if let currentContent = selectedContent,
+            item.contents.contains(where: { $0.id == currentContent.id })
+        {
+            // Content is still valid, keep it selected
+        } else {
+            // Default to text content if available, otherwise first content
+            if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
+                selectContent(textContent)
             } else {
-                // Default to text content if available, otherwise first content
-                if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
-                    selectContent(textContent)
-                } else {
-                    selectContent(item.contents.first)
-                }
+                selectContent(item.contents.first)
             }
         }
     }
 
     /// Selects a content and updates format selection accordingly
     func selectContent(_ content: ClipboardContent?) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            selectedContent = content
-
-            guard let content = content else {
-                selectedFormat = nil
-                return
+        // Ensure UI updates happen on the main thread
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectContent(content)
             }
+            return
+        }
 
-            // If current format is in the new content, keep it selected
-            if let currentFormat = selectedFormat,
-               content.formats.contains(where: { $0.id == currentFormat.id })
-            {
-                // Format is still valid, keep it selected
-            } else {
-                // Default to text format if available, otherwise first format
-                if content.canRenderAsText {
-                    if let textFormat = content.formats.first(where: {
-                        $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
-                    }) {
-                        selectedFormat = textFormat
-                    } else {
-                        selectedFormat = content.formats.first
-                    }
+        selectedContent = content
+
+        guard let content = content else {
+            selectedFormat = nil
+            return
+        }
+
+        // If current format is in the new content, keep it selected
+        if let currentFormat = selectedFormat,
+            content.formats.contains(where: { $0.id == currentFormat.id })
+        {
+            // Format is still valid, keep it selected
+        } else {
+            // Default to text format if available, otherwise first format
+            if content.canRenderAsText {
+                if let textFormat = content.formats.first(where: {
+                    $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+                }) {
+                    selectedFormat = textFormat
                 } else {
                     selectedFormat = content.formats.first
                 }
+            } else {
+                selectedFormat = content.formats.first
             }
         }
     }
 
     /// Selects a format, ensuring it belongs to the selected content
     func selectFormat(_ format: ClipboardFormat?) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            guard let format = format,
-                  let content = selectedContent,
-                  content.formats.contains(where: { $0.id == format.id })
-            else {
-                return
+        // Ensure UI updates happen on the main thread
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectFormat(format)
             }
-
-            selectedFormat = format
+            return
         }
+
+        guard let format = format,
+            let content = selectedContent,
+            content.formats.contains(where: { $0.id == format.id })
+        else {
+            return
+        }
+
+        selectedFormat = format
     }
 
     private func checkClipboard() {
@@ -447,5 +608,21 @@ class ClipboardMonitor: ObservableObject {
 
     deinit {
         stopMonitoring()
+    }
+}
+
+// Extension to get character width for different encodings
+extension String.Encoding {
+    var characterWidth: Int {
+        switch self {
+        case .ascii, .utf8, .isoLatin1, .isoLatin2:
+            return 1
+        case .utf16, .utf16BigEndian, .utf16LittleEndian:
+            return 2
+        case .utf32, .utf32BigEndian, .utf32LittleEndian:
+            return 4
+        default:
+            return 1
+        }
     }
 }
