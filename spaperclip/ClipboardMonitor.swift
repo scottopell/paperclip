@@ -29,6 +29,7 @@
  clipboard history across app restarts.
  */
 
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 import os
@@ -330,6 +331,7 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let timestamp: Date
     let changeCount: Int
     var contents: [ClipboardContent]
+    var sourceApplication: SourceApplicationInfo?
 
     var textRepresentation: String? {
         for content in contents {
@@ -345,6 +347,21 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     }
 
     static func == (lhs: ClipboardHistoryItem, rhs: ClipboardHistoryItem) -> Bool {
+        return lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
+    let id = UUID()
+    let bundleIdentifier: String?
+    let applicationName: String?
+    let applicationIcon: NSImage?
+
+    static func == (lhs: SourceApplicationInfo, rhs: SourceApplicationInfo) -> Bool {
         return lhs.id == rhs.id
     }
 
@@ -427,6 +444,31 @@ class ClipboardMonitor: ObservableObject {
         self.selectedHistoryItem = item
     }
 
+    /// Gets the application icon for a history item
+    func getIconForHistoryItem(_ item: ClipboardHistoryItem) -> NSImage? {
+        // First try to get the source application icon
+        if let sourceApp = item.sourceApplication, let icon = sourceApp.applicationIcon {
+            return icon
+        }
+
+        // If no source app icon, determine icon based on content
+        if item.hasImageRepresentation {
+            // Return image icon
+            return NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
+        } else if item.textRepresentation != nil {
+            // Return text icon
+            return NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        }
+
+        // Default icon
+        return NSImage(systemSymbolName: "clipboard", accessibilityDescription: nil)
+    }
+
+    /// Gets the source application name for a history item
+    func getSourceAppNameForHistoryItem(_ item: ClipboardHistoryItem) -> String {
+        return item.sourceApplication?.applicationName ?? "Unknown Application"
+    }
+
     private func checkClipboard() {
         let pasteboard = NSPasteboard.general
         let currentChangeCount = pasteboard.changeCount
@@ -497,13 +539,41 @@ class ClipboardMonitor: ObservableObject {
             )
         }
 
+        // Get source application information
+        var sourceAppInfo: SourceApplicationInfo? = nil
+
+        // Get the frontmost application as our best guess for the source
+        if let frontmostApp = NSWorkspace.shared.frontmostApplication {
+            sourceAppInfo = SourceApplicationInfo(
+                bundleIdentifier: frontmostApp.bundleIdentifier,
+                applicationName: frontmostApp.localizedName,
+                applicationIcon: frontmostApp.icon
+            )
+            self.logger.info(
+                "Presumed source application: \(frontmostApp.localizedName ?? "Unknown")")
+        }
+
+        // Additional processing for specific pasteboard types that might contain origin info
+        // Some applications put ownership information in custom pasteboard types
+        for type in availableTypes {
+            // Check for application-specific pasteboard types that might indicate source
+            if type.rawValue.contains("CorePasteboardFlavorType")
+                || type.rawValue.starts(with: "com.apple.") || type.rawValue.contains(".originator")
+            {
+                self.logger.info(
+                    "Found potential source identifier pasteboard type: \(type.rawValue)")
+                // We could parse these in the future to get more accurate source info
+            }
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 changeCount: pasteboard.changeCount,
-                contents: contents
+                contents: contents,
+                sourceApplication: sourceAppInfo
             )
 
             // Update current item reference
