@@ -5,6 +5,30 @@
 //  Created by Scott Opell on 5/4/25.
 //
 
+/*
+ FUTURE IMPROVEMENT: Core Data Persistence
+
+ Consider implementing Core Data for clipboard history persistence:
+
+ 1. Binary Data Storage:
+    - Use external storage option for large binary data
+    - Configure: NSPersistentStoreAllowExternalBinaryDataStorageOption = true
+
+ 2. Performance Optimizations:
+    - Save clipboard data on background context
+    - Use fault objects to load binary data on-demand
+    - Set up fetch request templates with proper indexing
+
+ 3. Implementation Strategy:
+    - Store metadata separately from binary content
+    - Load binary content only when viewed
+    - Release memory when content scrolls off-screen
+    - Implement batch cleanup for older entries
+
+ This approach would reduce memory usage and provide persistent
+ clipboard history across app restarts.
+ */
+
 import SwiftUI
 import UniformTypeIdentifiers
 import os
