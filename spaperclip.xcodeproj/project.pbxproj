@@ -29,12 +29,27 @@
 		47AEC6E32DC6B8B500E2B7EA /* spaperclipUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = spaperclipUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		47AEC6CA2DC6B8B300E2B7EA /* spaperclip */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = spaperclip;
-			sourceTree = "<group>";
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5EF28BE32DCC5129002C5DEF /* Exceptions for "spaperclip" folder in "spaperclip" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				sPaperclipDataModel.xcdatamodeld,
+			);
+			target = 47AEC6C72DC6B8B300E2B7EA /* spaperclip */;
 		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		5EF28BE42DCC5129002C5DEF /* Exceptions for "spaperclip" folder in "Compile Sources" phase from "spaperclip" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 47AEC6C42DC6B8B300E2B7EA /* Sources */;
+			membershipExceptions = (
+				sPaperclipDataModel.xcdatamodeld,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
 		47AEC6DC2DC6B8B500E2B7EA /* spaperclipTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = spaperclipTests;
@@ -43,6 +58,15 @@
 		47AEC6E62DC6B8B500E2B7EA /* spaperclipUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = spaperclipUITests;
+			sourceTree = "<group>";
+		};
+		5EF28BD42DCC5129002C5DEF /* spaperclip */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5EF28BE32DCC5129002C5DEF /* Exceptions for "spaperclip" folder in "spaperclip" target */,
+				5EF28BE42DCC5129002C5DEF /* Exceptions for "spaperclip" folder in "Compile Sources" phase from "spaperclip" target */,
+			);
+			path = spaperclip;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,7 +99,7 @@
 		47AEC6BF2DC6B8B300E2B7EA = {
 			isa = PBXGroup;
 			children = (
-				47AEC6CA2DC6B8B300E2B7EA /* spaperclip */,
+				5EF28BD42DCC5129002C5DEF /* spaperclip */,
 				47AEC6DC2DC6B8B500E2B7EA /* spaperclipTests */,
 				47AEC6E62DC6B8B500E2B7EA /* spaperclipUITests */,
 				47AEC6C92DC6B8B300E2B7EA /* Products */,
@@ -108,7 +132,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				47AEC6CA2DC6B8B300E2B7EA /* spaperclip */,
+				5EF28BD42DCC5129002C5DEF /* spaperclip */,
 			);
 			name = spaperclip;
 			packageProductDependencies = (

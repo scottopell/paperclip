@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788" systemVersion="24E263" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="CDClipboardContent" representedClassName="CDClipboardContent" syncable="YES">
+        <attribute name="data" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="descriptionText" attributeType="String"/>
+        <relationship name="formats" toMany="YES" deletionRule="Cascade" destinationEntity="CDClipboardFormat" inverseName="content" inverseEntity="CDClipboardFormat"/>
+        <relationship name="historyItem" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDClipboardHistoryItem" inverseName="contents" inverseEntity="CDClipboardHistoryItem"/>
+    </entity>
+    <entity name="CDClipboardFormat" representedClassName="CDClipboardFormat" syncable="YES">
+        <attribute name="uti" attributeType="String"/>
+        <relationship name="content" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDClipboardContent" inverseName="formats" inverseEntity="CDClipboardContent"/>
+    </entity>
+    <entity name="CDClipboardHistoryItem" representedClassName="CDClipboardHistoryItem" syncable="YES">
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="contents" toMany="YES" deletionRule="Cascade" destinationEntity="CDClipboardContent" inverseName="historyItem" inverseEntity="CDClipboardContent"/>
+        <relationship name="sourceApplication" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDSourceApplicationInfo" inverseName="historyItems" inverseEntity="CDSourceApplicationInfo"/>
+    </entity>
+    <entity name="CDSourceApplicationInfo" representedClassName="CDSourceApplicationInfo" syncable="YES">
+        <attribute name="applicationIconData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="applicationName" optional="YES" attributeType="String"/>
+        <attribute name="bundleIdentifier" optional="YES" attributeType="String"/>
+        <relationship name="historyItems" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="CDClipboardHistoryItem" inverseName="sourceApplication" inverseEntity="CDClipboardHistoryItem"/>
+    </entity>
+</model>

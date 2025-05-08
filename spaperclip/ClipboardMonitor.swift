@@ -36,10 +36,12 @@ import os
 
 // MARK: - Models
 
+/// Represents a clipboard data format with its associated UTI (Uniform Type Identifier)
 struct ClipboardFormat: Identifiable, Hashable {
     let id = UUID()
     let uti: String
 
+    /// Provides a human-readable name for the format based on its UTI
     var typeName: String {
         switch uti {
         case UTType.plainText.identifier, "public.utf8-plain-text":
@@ -71,6 +73,8 @@ struct ClipboardFormat: Identifiable, Hashable {
     }
 }
 
+/// Represents a single piece of data from the clipboard with its available formats
+/// Implements efficient handling of potentially large data objects
 struct ClipboardContent: Identifiable, Hashable {
     let id = UUID()
     let data: Data
@@ -135,6 +139,7 @@ struct ClipboardContent: Identifiable, Hashable {
     }
 
     /// Detects the most likely text encoding of the data
+    /// Tests progressively through common encodings without loading the full content
     private func detectTextEncoding() -> String.Encoding? {
         // Try UTF-8 first (most common)
         if String(data: data.prefix(min(1024, data.count)), encoding: .utf8) != nil {
@@ -154,6 +159,9 @@ struct ClipboardContent: Identifiable, Hashable {
     }
 
     /// Gets a chunk of text at specified position with specified length
+    /// Uses a memory-efficient approach for large text content:
+    /// - For small texts (<100KB): loads entire content
+    /// - For large texts: loads only the requested chunk
     /// - Parameters:
     ///   - offset: Character offset from the beginning
     ///   - length: Maximum length to read in characters
@@ -180,7 +188,10 @@ struct ClipboardContent: Identifiable, Hashable {
                 return nil
             }
 
-            // For larger texts, load a bit more than requested to ensure we find clean boundaries
+            // For larger texts, we use byte-based chunking with boundary safety:
+            // 1. Estimate character width based on encoding
+            // 2. Add safety buffer to avoid cutting characters
+            // 3. Convert only the needed chunk to string
             let encoding = detectTextEncoding() ?? .utf8
             let avgBytesPerChar = encoding.characterWidth
             let startByte = min(offset * avgBytesPerChar, data.count)
@@ -320,10 +331,11 @@ struct ClipboardContent: Identifiable, Hashable {
     }
 }
 
+/// Represents a clipboard entry with its timestamp, change count, and available contents
+/// Multiple contents can be present when the clipboard contains data in various formats
 struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let id = UUID()
     let timestamp: Date
-    let changeCount: Int
     let contents: [ClipboardContent]
     let sourceApplication: SourceApplicationInfo?
 
@@ -342,22 +354,23 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
 
     // Custom implementation to compare contents semantically
     static func == (lhs: ClipboardHistoryItem, rhs: ClipboardHistoryItem) -> Bool {
-        return lhs.changeCount == rhs.changeCount && lhs.contents == rhs.contents
-            && lhs.sourceApplication == rhs.sourceApplication
+        return lhs.contents == rhs.contents && lhs.sourceApplication == rhs.sourceApplication
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(changeCount)
         hasher.combine(contents)
         hasher.combine(sourceApplication)
     }
 }
 
+/// Holds information about the application that was the source of a clipboard item
+/// The applicationIcon is excluded from equality/hash operations as NSImage
+/// may not consistently implement these operations across macOS versions
 struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
     let id = UUID()
     let bundleIdentifier: String?
     let applicationName: String?
-    // NSImage might not be properly Hashable, exclude from equality/hash
+    // See note above, NSImage is excluded from equality/hash
     let applicationIcon: NSImage?
 
     static func == (lhs: SourceApplicationInfo, rhs: SourceApplicationInfo) -> Bool {
@@ -373,6 +386,8 @@ struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
 
 // MARK: - View Model
 
+/// Responsible for monitoring clipboard changes and maintaining a history of items
+/// Uses a timer-based polling approach to detect changes in the system clipboard
 class ClipboardMonitor: ObservableObject {
     @Published var currentItem: ClipboardHistoryItem?
     @Published var history: [ClipboardHistoryItem] = []
@@ -384,6 +399,11 @@ class ClipboardMonitor: ObservableObject {
     private let logger = Logger(
         subsystem: "com.scottopell.spaperclip", category: "ClipboardMonitor")
 
+    // Add persistence manager reference
+    private let persistenceManager = ClipboardPersistenceManager.shared
+
+    // Predefined UTIs we specifically handle in order of priority
+    // Other types will still be processed but with default handling
     private let knownTypes = [
         "public.utf8-plain-text",
         "public.rtf",
@@ -403,10 +423,35 @@ class ClipboardMonitor: ObservableObject {
         let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
 
+        // Load history from Core Data
+        loadSavedHistory()
+
         startMonitoring()
         updateFromClipboard()
 
         logger.info("Initialization complete")
+    }
+
+    // Load previously saved clipboard history from Core Data
+    private func loadSavedHistory() {
+        logger.info("Loading clipboard history from Core Data")
+
+        persistenceManager.loadHistoryItems { [weak self] loadedItems in
+            guard let self = self else { return }
+
+            DispatchQueue.main.async {
+                // Notify SwiftUI before making changes to avoid intermediate updates
+                self.objectWillChange.send()
+
+                if !loadedItems.isEmpty {
+                    self.history = loadedItems
+                    self.selectedHistoryItem = self.history.first
+                    self.logger.info("Loaded \(loadedItems.count) history items from persistence")
+                } else {
+                    self.logger.info("No history items found in persistence")
+                }
+            }
+        }
     }
 
     func startMonitoring() {
@@ -428,6 +473,10 @@ class ClipboardMonitor: ObservableObject {
     func clearHistory() {
         history.removeAll()
         selectedHistoryItem = nil
+
+        // Clear persisted history
+        persistenceManager.clearAllHistory()
+        logger.info("Clipboard history cleared and persistence data removed")
     }
 
     // MARK: - Selection Management
@@ -446,22 +495,12 @@ class ClipboardMonitor: ObservableObject {
     }
 
     /// Gets the application icon for a history item
+    /// Prioritizes source app icon, falls back to generic clipboard icon
     func getIconForHistoryItem(_ item: ClipboardHistoryItem) -> NSImage? {
-        // First try to get the source application icon
         if let sourceApp = item.sourceApplication, let icon = sourceApp.applicationIcon {
             return icon
         }
 
-        // If no source app icon, determine icon based on content
-        if item.hasImageRepresentation {
-            // Return image icon
-            return NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
-        } else if item.textRepresentation != nil {
-            // Return text icon
-            return NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
-        }
-
-        // Default icon
         return NSImage(systemSymbolName: "clipboard", accessibilityDescription: nil)
     }
 
@@ -483,6 +522,8 @@ class ClipboardMonitor: ObservableObject {
         }
     }
 
+    /// Captures clipboard content, groups it by unique data objects,
+    /// and updates history with deduplicated entries
     private func updateFromClipboard() {
         let pasteboard = NSPasteboard.general
 
@@ -490,8 +531,21 @@ class ClipboardMonitor: ObservableObject {
             return
         }
 
-        // Create a dictionary to group data by content
-        var contentGroups: [Data: (description: String, formats: [ClipboardFormat])] = [:]
+        // Content grouping strategy:
+        // 1. Group identical binary data with different formats together
+        // 2. Avoid duplicating large binary blobs in memory
+        // 3. Create a consistent representation of each unique clipboard item
+        class ContentGroup {
+            let description: String
+            var formats: [ClipboardFormat]
+
+            init(description: String, format: ClipboardFormat) {
+                self.description = description
+                self.formats = [format]
+            }
+        }
+
+        var contentGroups: [Data: ContentGroup] = [:]
 
         // First pass: collect all data and formats
         for type in knownTypes {
@@ -505,14 +559,10 @@ class ClipboardMonitor: ObservableObject {
 
                 let format = ClipboardFormat(uti: type)
 
-                if var existing = contentGroups[data] {
-                    // Create a new array with the additional format instead of appending
-                    let updatedFormats = existing.formats + [format]
-                    contentGroups[data] = (
-                        description: existing.description, formats: updatedFormats
-                    )
+                if let existing = contentGroups[data] {
+                    existing.formats.append(format)
                 } else {
-                    contentGroups[data] = (description: description, formats: [format])
+                    contentGroups[data] = ContentGroup(description: description, format: format)
                 }
             }
         }
@@ -525,26 +575,23 @@ class ClipboardMonitor: ObservableObject {
             {
                 let format = ClipboardFormat(uti: typeString)
 
-                if var existing = contentGroups[data] {
-                    // Create a new array with the additional format instead of appending
-                    let updatedFormats = existing.formats + [format]
-                    contentGroups[data] = (
-                        description: existing.description, formats: updatedFormats
-                    )
+                if let existing = contentGroups[data] {
+                    existing.formats.append(format)
                 } else {
-                    contentGroups[data] = (
-                        description: "Binary data (\(data.count) bytes)", formats: [format]
+                    contentGroups[data] = ContentGroup(
+                        description: "Binary data (\(data.count) bytes)",
+                        format: format
                     )
                 }
             }
         }
 
         // Convert dictionary to array of ClipboardContent
-        let contents = contentGroups.map { (data, info) in
+        let contents = contentGroups.map { (data, group) in
             ClipboardContent(
                 data: data,
-                formats: info.formats,
-                description: info.description
+                formats: group.formats,
+                description: group.description
             )
         }
 
@@ -571,16 +618,18 @@ class ClipboardMonitor: ObservableObject {
             {
                 self.logger.info(
                     "Found potential source identifier pasteboard type: \(type.rawValue)")
-                // We could parse these in the future to get more accurate source info
+                // These could be parsed to get more accurate source info
             }
         }
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
+            // Notify SwiftUI before making changes to avoid intermediate updates
+            self.objectWillChange.send()
+
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
-                changeCount: pasteboard.changeCount,
                 contents: contents,
                 sourceApplication: sourceAppInfo
             )
@@ -590,44 +639,54 @@ class ClipboardMonitor: ObservableObject {
             self.currentItemID = newItem.id
 
             if !contents.isEmpty {
-                // Insert at beginning (most recent first)
-                self.history.insert(newItem, at: 0)
+                // Check if this item is a duplicate of any item already in history
+                let isDuplicate = self.history.contains { $0 == newItem }
 
-                // Limit history size
-                if self.history.count > 100 {
-                    self.history = Array(self.history.prefix(100))
+                if !isDuplicate {
+                    // Insert at beginning (most recent first)
+                    self.history.insert(newItem, at: 0)
+
+                    // Directly update selectedHistoryItem without calling selectHistoryItem method
+                    self.selectedHistoryItem = newItem
+
+                    // Persist the new item to Core Data
+                    self.persistenceManager.saveHistoryItem(newItem)
+
+                } else {
+                    // If it's a duplicate, find the matching item and move it to the top
+
+                    if let index = self.history.firstIndex(where: { $0 == newItem }) {
+                        let existingItem = self.history.remove(at: index)
+                        self.history.insert(existingItem, at: 0)
+
+                        // Directly update selectedHistoryItem without calling selectHistoryItem method
+                        self.selectedHistoryItem = existingItem
+
+                        self.logger.info("Duplicate item detected - moved existing to top")
+                    }
                 }
 
-                // Select the new clipboard item as the active selection
-                self.selectHistoryItem(newItem)
+                // Limit history size to control memory usage
+                // 100 items balances usability with performance
+                if self.history.count > 100 {
+                    self.history = Array(self.history.prefix(100))
+
+                    // Also limit the persisted history size
+                    self.persistenceManager.limitHistorySize(to: 100)
+                }
             }
+
+            // Update last change count after processing
+            self.lastChangeCount = pasteboard.changeCount
 
             self.logger.info(
-                "UI updated with new clipboard content: \(contents.count) content groups")
+                "UI updated with clipboard content: \(contents.count) content groups")
         }
-    }
-
-    /// Gets a valid content for the given history item, prioritizing text content
-    func getDefaultContentForItem(_ item: ClipboardHistoryItem) -> ClipboardContent? {
-        if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
-            return textContent
-        }
-        return item.contents.first
-    }
-
-    /// Gets a valid format for the given content, prioritizing plain text formats
-    func getDefaultFormatForContent(_ content: ClipboardContent) -> ClipboardFormat? {
-        if content.canRenderAsText {
-            if let textFormat = content.formats.first(where: {
-                $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
-            }) {
-                return textFormat
-            }
-        }
-        return content.formats.first
     }
 
     /// Copies only the plain text representation of a history item to the clipboard
+    /// Bypasses the full clipboard data structure to ensure compatibility
+    /// with applications that only support plain text
     func copyPlainTextOnly(_ item: ClipboardHistoryItem) {
         guard let textRepresentation = item.textRepresentation else {
             logger.warning("Cannot copy plain text: no text representation available")
@@ -651,6 +710,8 @@ class ClipboardMonitor: ObservableObject {
 
 // Extension to get character width for different encodings
 extension String.Encoding {
+    /// Returns the typical number of bytes per character for this encoding
+    /// Used for efficient text chunking without loading entire large strings
     var characterWidth: Int {
         switch self {
         case .ascii, .utf8, .isoLatin1, .isoLatin2:
