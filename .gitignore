@@ -1,3 +1,4 @@
 *.dmg
 build
 
+.build
