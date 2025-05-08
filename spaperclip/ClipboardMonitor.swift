@@ -69,21 +69,12 @@ struct ClipboardFormat: Identifiable, Hashable {
             return uti
         }
     }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(uti)
-    }
-
-    static func == (lhs: ClipboardFormat, rhs: ClipboardFormat) -> Bool {
-        return lhs.id == rhs.id && lhs.uti == rhs.uti
-    }
 }
 
 struct ClipboardContent: Identifiable, Hashable {
     let id = UUID()
     let data: Data
-    var formats: [ClipboardFormat]
+    let formats: [ClipboardFormat]
     let description: String
 
     // Explicit initializer
@@ -316,13 +307,16 @@ struct ClipboardContent: Identifiable, Hashable {
         }
     }
 
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(data)
+    // Custom implementation to compare contents semantically
+    static func == (lhs: ClipboardContent, rhs: ClipboardContent) -> Bool {
+        return lhs.data == rhs.data && lhs.formats == rhs.formats
+            && lhs.description == rhs.description
     }
 
-    static func == (lhs: ClipboardContent, rhs: ClipboardContent) -> Bool {
-        return lhs.id == rhs.id
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(data)
+        hasher.combine(formats)
+        hasher.combine(description)
     }
 }
 
@@ -330,8 +324,8 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     let id = UUID()
     let timestamp: Date
     let changeCount: Int
-    var contents: [ClipboardContent]
-    var sourceApplication: SourceApplicationInfo?
+    let contents: [ClipboardContent]
+    let sourceApplication: SourceApplicationInfo?
 
     var textRepresentation: String? {
         for content in contents {
@@ -346,12 +340,16 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
         return contents.contains { $0.canRenderAsImage }
     }
 
+    // Custom implementation to compare contents semantically
     static func == (lhs: ClipboardHistoryItem, rhs: ClipboardHistoryItem) -> Bool {
-        return lhs.id == rhs.id
+        return lhs.changeCount == rhs.changeCount && lhs.contents == rhs.contents
+            && lhs.sourceApplication == rhs.sourceApplication
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
+        hasher.combine(changeCount)
+        hasher.combine(contents)
+        hasher.combine(sourceApplication)
     }
 }
 
@@ -359,14 +357,17 @@ struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
     let id = UUID()
     let bundleIdentifier: String?
     let applicationName: String?
+    // NSImage might not be properly Hashable, exclude from equality/hash
     let applicationIcon: NSImage?
 
     static func == (lhs: SourceApplicationInfo, rhs: SourceApplicationInfo) -> Bool {
-        return lhs.id == rhs.id
+        return lhs.bundleIdentifier == rhs.bundleIdentifier
+            && lhs.applicationName == rhs.applicationName
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
+        hasher.combine(bundleIdentifier)
+        hasher.combine(applicationName)
     }
 }
 
@@ -504,8 +505,12 @@ class ClipboardMonitor: ObservableObject {
 
                 let format = ClipboardFormat(uti: type)
 
-                if contentGroups[data] != nil {
-                    contentGroups[data]?.formats.append(format)
+                if var existing = contentGroups[data] {
+                    // Create a new array with the additional format instead of appending
+                    let updatedFormats = existing.formats + [format]
+                    contentGroups[data] = (
+                        description: existing.description, formats: updatedFormats
+                    )
                 } else {
                     contentGroups[data] = (description: description, formats: [format])
                 }
@@ -520,8 +525,12 @@ class ClipboardMonitor: ObservableObject {
             {
                 let format = ClipboardFormat(uti: typeString)
 
-                if contentGroups[data] != nil {
-                    contentGroups[data]?.formats.append(format)
+                if var existing = contentGroups[data] {
+                    // Create a new array with the additional format instead of appending
+                    let updatedFormats = existing.formats + [format]
+                    contentGroups[data] = (
+                        description: existing.description, formats: updatedFormats
+                    )
                 } else {
                     contentGroups[data] = (
                         description: "Binary data (\(data.count) bytes)", formats: [format]
