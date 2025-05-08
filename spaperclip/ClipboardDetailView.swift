@@ -33,6 +33,28 @@ struct ClipboardDetailView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
 
+                    if let sourceApp = item.sourceApplication {
+                        Spacer().frame(width: 8)
+
+                        HStack {
+                            if let nsImage = sourceApp.applicationIcon {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 16, height: 16)
+                            }
+
+                            if let appName = sourceApp.applicationName, !appName.isEmpty {
+                                Text(appName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(4)
+                        .contentShape(Rectangle())
+                        .help(sourceApp.bundleIdentifier ?? "Unknown application")
+                    }
+
                     Spacer()
 
                     Button(action: {
@@ -268,6 +290,50 @@ struct ClipboardDetailView: View {
 
             // Integrated metadata section
             VStack(alignment: .leading, spacing: 4) {
+                // Source application section when available
+                if let sourceApp = monitor.selectedHistoryItem?.sourceApplication,
+                    sourceApp.applicationName != nil || sourceApp.bundleIdentifier != nil
+                {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Source Application")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fontWeight(.semibold)
+
+                            Spacer()
+                        }
+
+                        HStack(spacing: 12) {
+                            if let icon = sourceApp.applicationIcon {
+                                Image(nsImage: icon)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 24, height: 24)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let appName = sourceApp.applicationName {
+                                    Text(appName)
+                                        .font(.caption)
+                                }
+
+                                if let bundleId = sourceApp.bundleIdentifier {
+                                    Text(bundleId)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                            }
+
+                            Spacer()
+                        }
+                    }
+                    .padding(6)
+                    .background(Color.accentColor.opacity(0.1))
+                    .cornerRadius(4)
+                }
+
                 HStack {
                     VStack(alignment: .leading) {
                         HStack {
