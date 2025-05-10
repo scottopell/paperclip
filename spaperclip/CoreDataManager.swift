@@ -10,8 +10,20 @@ class CoreDataManager {
 
     // MARK: - Core Data stack
 
-    private lazy var persistentContainer: NSPersistentContainer = {
+    // Thread-safe persistent container using Swift's built-in thread safety for static properties
+    private static let persistentContainerInstance: NSPersistentContainer = {
+        let initLogger = Logger(subsystem: "com.scottopell.spaperclip", category: "CoreDataManager")
+        initLogger.info("Beginning static initialization of persistent container")
+
         let container = NSPersistentContainer(name: "sPaperclipDataModel")
+
+        // Log entity descriptions to verify model loading
+        let entities = container.managedObjectModel.entities
+        initLogger.info("Loaded managed object model with \(entities.count) entities:")
+        for entity in entities {
+            initLogger.info(
+                " - Entity: \(entity.name ?? "unnamed"), class: \(entity.managedObjectClassName)")
+        }
 
         // Create a proper URL for the database file in Application Support directory
         let fileManager = FileManager.default
@@ -26,9 +38,10 @@ class CoreDataManager {
             do {
                 try fileManager.createDirectory(
                     at: storeDirectory, withIntermediateDirectories: true)
-                self.logger.info("Created directory for database at: \(storeDirectory.path)")
+                // Use a logger instance for the static initializer
+                initLogger.info("Created directory for database at: \(storeDirectory.path)")
             } catch {
-                self.logger.error(
+                initLogger.error(
                     "Failed to create directory for database: \(error.localizedDescription)")
             }
         }
@@ -40,15 +53,15 @@ class CoreDataManager {
         storeDescription.type = NSSQLiteStoreType
         container.persistentStoreDescriptions = [storeDescription]
 
-        self.logger.info("Setting up persistent store at: \(storeURL.path)")
+        initLogger.info("Setting up persistent store at: \(storeURL.path)")
 
         container.loadPersistentStores { (storeDescription, error) in
             if let error = error as NSError? {
-                self.logger.error("Failed to load persistent stores: \(error.localizedDescription)")
+                initLogger.error("Failed to load persistent stores: \(error.localizedDescription)")
                 fatalError("Failed to load persistent stores: \(error)")
             }
 
-            self.logger.info(
+            initLogger.info(
                 "Successfully loaded persistent store: \(storeDescription.url?.absoluteString ?? "unknown")"
             )
         }
@@ -60,35 +73,56 @@ class CoreDataManager {
         return container
     }()
 
-    // Background context for write operations
-    private lazy var backgroundContext: NSManagedObjectContext = {
-        let context = persistentContainer.newBackgroundContext()
-        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-        return context
-    }()
+    // Public accessor for the thread-safe persistent container
+    var persistentContainer: NSPersistentContainer {
+        return CoreDataManager.persistentContainerInstance
+    }
 
     // View context for read operations
     var viewContext: NSManagedObjectContext {
-        return persistentContainer.viewContext
+        let context = persistentContainer.viewContext
+        // Ensure view context is properly configured
+        context.automaticallyMergesChangesFromParent = true
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        logger.debug("Accessing view context: \(context)")
+        return context
     }
 
-    private init() {}
+    private init() {
+        logger.info("CoreDataManager initialized")
+        // Print entities in the model for diagnostic purposes
+        let entities = persistentContainer.managedObjectModel.entities
+        logger.info(
+            "Available entities in model: \(entities.map { $0.name ?? "unnamed" }.joined(separator: ", "))"
+        )
+    }
 
     // MARK: - Core Data operations
 
     /// Performs a block on the background context and saves changes
     func performBackgroundTask(_ block: @escaping (NSManagedObjectContext) -> Void) {
-        backgroundContext.perform {
-            block(self.backgroundContext)
+        logger.info("Starting performBackgroundTask")
 
-            if self.backgroundContext.hasChanges {
+        // Create a new background context for each task
+        let backgroundContext = persistentContainer.newBackgroundContext()
+        backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+        logger.info("Created background context: \(backgroundContext)")
+
+        backgroundContext.perform {
+            self.logger.info("Executing background context block")
+            block(backgroundContext)
+
+            if backgroundContext.hasChanges {
                 do {
-                    try self.backgroundContext.save()
+                    try backgroundContext.save()
                     self.logger.info("Background context saved successfully")
                 } catch {
                     self.logger.error(
                         "Failed to save background context: \(error.localizedDescription)")
                 }
+            } else {
+                self.logger.info("No changes to save in background context")
             }
         }
     }

@@ -72,13 +72,19 @@ class ClipboardPersistenceManager {
     /// Loads all clipboard history items from Core Data
     func loadHistoryItems(completion: @escaping ([ClipboardHistoryItem]) -> Void) {
         // Use the background context to avoid blocking the main thread for potentially large datasets
+        self.logger.info("Starting to load history items...")
+
         coreDataManager.performBackgroundTask { context in
             let fetchRequest = NSFetchRequest<CDClipboardHistoryItem>(
                 entityName: "CDClipboardHistoryItem")
             fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
 
+            self.logger.info("Executing fetch request for history items")
+
             do {
                 let historyItemEntities = try context.fetch(fetchRequest)
+                self.logger.info("Fetched \(historyItemEntities.count) raw entities from Core Data")
+
                 var historyItems: [ClipboardHistoryItem] = []
 
                 for entity in historyItemEntities {
@@ -87,10 +93,13 @@ class ClipboardPersistenceManager {
                     }
                 }
 
-                self.logger.info("Loaded \(historyItems.count) history items from Core Data")
+                self.logger.info(
+                    "Successfully converted \(historyItems.count) history items from Core Data")
 
                 // Return results on the main thread
                 DispatchQueue.main.async {
+                    self.logger.info(
+                        "Delivering \(historyItems.count) history items to UI on main thread")
                     completion(historyItems)
                 }
             } catch {
