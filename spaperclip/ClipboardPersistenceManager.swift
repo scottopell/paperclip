@@ -160,16 +160,10 @@ class ClipboardPersistenceManager {
     private func convertToSourceApplicationInfo(from entity: CDSourceApplicationInfo)
         -> SourceApplicationInfo?
     {
-        // Convert icon data to NSImage
-        var applicationIcon: NSImage? = nil
-        if let iconData = entity.applicationIconData {
-            applicationIcon = NSImage(data: iconData)
-        }
-
         return SourceApplicationInfo(
             bundleIdentifier: entity.bundleIdentifier,
             applicationName: entity.applicationName,
-            applicationIcon: applicationIcon
+            applicationIconData: entity.applicationIconData
         )
     }
 

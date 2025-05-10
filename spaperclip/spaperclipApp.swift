@@ -5,6 +5,7 @@
 //  Created by Scott Opell on 5/4/25.
 //
 
+import AppKit
 import SwiftUI
 
 // MARK: - App
@@ -13,6 +14,7 @@ import SwiftUI
 @main
 struct ClipboardViewerApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var menuBarManager = MenuBarManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -24,6 +26,10 @@ struct ClipboardViewerApp: App {
                         CoreDataManager.shared.saveViewContext()
                     }
                 }
+                .onAppear {
+                    // Setup the menu bar item
+                    menuBarManager.setupMenuBar()
+                }
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
@@ -34,6 +40,13 @@ struct ClipboardViewerApp: App {
                     ClipboardPersistenceManager.shared.clearAllHistory()
                 }
                 .keyboardShortcut("K", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Database Statistics") {
+                    StatsWindowController.shared.showStatsWindow()
+                }
+                .keyboardShortcut("D", modifiers: [.command, .option])
             }
         }
     }

@@ -246,19 +246,6 @@ struct HistoryListView: View {
                         searchTextPublisher.send(newText)
                     }
                 )
-
-                Spacer()
-
-                Button(action: {
-                    searchText = ""
-                    searchTextPublisher.send("")
-                    monitor.clearHistory()
-                }) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help("Clear History")
             }
             .padding(.bottom, 4)
 

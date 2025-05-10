@@ -370,8 +370,34 @@ struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
     let id = UUID()
     let bundleIdentifier: String?
     let applicationName: String?
-    // See note above, NSImage is excluded from equality/hash
-    let applicationIcon: NSImage?
+    // Store the raw icon data instead of the NSImage
+    private let applicationIconData: Data?
+
+    // Lazy load the icon only when needed
+    var applicationIcon: NSImage? {
+        if let iconData = applicationIconData {
+            return NSImage(data: iconData)
+        }
+        return nil
+    }
+
+    init(bundleIdentifier: String?, applicationName: String?, applicationIconData: Data?) {
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationName = applicationName
+        self.applicationIconData = applicationIconData
+    }
+
+    // For backward compatibility
+    init(bundleIdentifier: String?, applicationName: String?, applicationIcon: NSImage?) {
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationName = applicationName
+        // Extract data from provided NSImage if any
+        if let icon = applicationIcon, let tiffData = icon.tiffRepresentation {
+            self.applicationIconData = tiffData
+        } else {
+            self.applicationIconData = nil
+        }
+    }
 
     static func == (lhs: SourceApplicationInfo, rhs: SourceApplicationInfo) -> Bool {
         return lhs.bundleIdentifier == rhs.bundleIdentifier
@@ -603,7 +629,7 @@ class ClipboardMonitor: ObservableObject {
             sourceAppInfo = SourceApplicationInfo(
                 bundleIdentifier: frontmostApp.bundleIdentifier,
                 applicationName: frontmostApp.localizedName,
-                applicationIcon: frontmostApp.icon
+                applicationIconData: frontmostApp.icon?.tiffRepresentation
             )
             self.logger.info(
                 "Presumed source application: \(frontmostApp.localizedName ?? "Unknown")")
