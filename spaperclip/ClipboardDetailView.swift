@@ -238,7 +238,7 @@ struct ClipboardDetailView: View {
             Image(systemName: "photo")
                 .foregroundColor(.green)
         } else {
-            Image(systemName: "doc.binary")
+            Image(systemName: "doc.fill")
                 .foregroundColor(.gray)
         }
     }

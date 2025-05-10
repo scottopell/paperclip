@@ -6,7 +6,21 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            HistoryListView(monitor: clipboardMonitor)
+            ZStack {
+                HistoryListView(monitor: clipboardMonitor)
+
+                if clipboardMonitor.isLoadingHistory {
+                    VStack {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Loading history...")
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(NSColor.windowBackgroundColor).opacity(0.8))
+                }
+            }
         } detail: {
             ClipboardDetailView(
                 monitor: clipboardMonitor,

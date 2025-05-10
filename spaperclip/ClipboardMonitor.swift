@@ -419,6 +419,7 @@ class ClipboardMonitor: ObservableObject {
     @Published var history: [ClipboardHistoryItem] = []
     @Published var selectedHistoryItem: ClipboardHistoryItem?
     @Published var currentItemID: UUID?
+    @Published var isLoadingHistory: Bool = false
 
     private var timer: Timer?
     private var lastChangeCount: Int = 0
@@ -449,11 +450,14 @@ class ClipboardMonitor: ObservableObject {
         let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
 
-        // Load history from Core Data
-        loadSavedHistory()
-
+        // Start monitoring first to make UI responsive
         startMonitoring()
         updateFromClipboard()
+
+        // Load history asynchronously to prevent UI hang
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.loadSavedHistory()
+        }
 
         logger.info("Initialization complete")
     }
@@ -462,12 +466,17 @@ class ClipboardMonitor: ObservableObject {
     private func loadSavedHistory() {
         logger.info("Loading clipboard history from Core Data")
 
+        DispatchQueue.main.async { [weak self] in
+            self?.isLoadingHistory = true
+        }
+
         persistenceManager.loadHistoryItems { [weak self] loadedItems in
             guard let self = self else { return }
 
             DispatchQueue.main.async {
                 // Notify SwiftUI before making changes to avoid intermediate updates
                 self.objectWillChange.send()
+                self.isLoadingHistory = false
 
                 if !loadedItems.isEmpty {
                     self.history = loadedItems
