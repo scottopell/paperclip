@@ -430,26 +430,32 @@ class ClipboardMonitor: ObservableObject {
         "com.apple.finder.drag.clipping",
     ]
 
+    // Add a flag to track initial state
+    private var initialStartupComplete = false
+
     init() {
         logger.info("Application starting")
 
         let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
 
-        // Start monitoring first to make UI responsive
-        startMonitoring()
-        updateFromClipboard()
-
-        // Load history asynchronously to prevent UI hang
+        // Simply load history first
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.loadSavedHistory()
+            self?.loadSavedHistory { [weak self] in
+                // After history is loaded, mark startup as complete and start monitoring
+                DispatchQueue.main.async {
+                    self?.initialStartupComplete = true
+                    self?.startMonitoring()
+                    self?.logger.info("Initial startup complete, monitoring started")
+                }
+            }
         }
 
-        logger.info("Initialization complete")
+        logger.info("Initialization sequence started")
     }
 
     // Load previously saved clipboard history from Core Data
-    private func loadSavedHistory() {
+    private func loadSavedHistory(completion: @escaping () -> Void) {
         logger.info("Loading clipboard history from Core Data")
 
         DispatchQueue.main.async { [weak self] in
@@ -460,17 +466,28 @@ class ClipboardMonitor: ObservableObject {
             guard let self = self else { return }
 
             DispatchQueue.main.async {
-                // Notify SwiftUI before making changes to avoid intermediate updates
+                // Notify SwiftUI before making changes
                 self.objectWillChange.send()
                 self.isLoadingHistory = false
 
                 if !loadedItems.isEmpty {
                     self.history = loadedItems
-                    self.selectedHistoryItem = self.history.first
+
+                    // Set the first history item as the current item on startup
+                    if let firstItem = self.history.first {
+                        self.currentItem = firstItem
+                        self.currentItemID = firstItem.id
+                        self.selectedHistoryItem = firstItem
+                        self.logger.info("Selected first history item as current item")
+                    }
+
                     self.logger.info("Loaded \(loadedItems.count) history items from persistence")
                 } else {
                     self.logger.info("No history items found in persistence")
                 }
+
+                // Call completion handler
+                completion()
             }
         }
     }
@@ -537,8 +554,14 @@ class ClipboardMonitor: ObservableObject {
         if currentChangeCount != lastChangeCount {
             logger.info("Clipboard changed: \(self.lastChangeCount) -> \(currentChangeCount)")
             lastChangeCount = currentChangeCount
-            DispatchQueue.main.async { [weak self] in
-                self?.updateFromClipboard()
+
+            // Only process clipboard changes after initial startup is complete
+            if initialStartupComplete {
+                DispatchQueue.main.async { [weak self] in
+                    self?.updateFromClipboard()
+                }
+            } else {
+                logger.info("Skipping clipboard update during initial startup")
             }
         }
     }
