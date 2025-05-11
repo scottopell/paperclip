@@ -171,8 +171,7 @@ class ClipboardPersistenceManager {
     {
         return SourceApplicationInfo(
             bundleIdentifier: entity.bundleIdentifier,
-            applicationName: entity.applicationName,
-            applicationIconData: entity.applicationIconData
+            applicationName: entity.applicationName
         )
     }
 

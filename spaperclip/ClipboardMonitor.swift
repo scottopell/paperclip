@@ -10,14 +10,14 @@
 
  Consider implementing Core Data for clipboard history persistence:
 
- 1. Binary Data Storage:
+ 1. [DONE] Binary Data Storage:
     - Use external storage option for large binary data
     - Configure: NSPersistentStoreAllowExternalBinaryDataStorageOption = true
 
  2. Performance Optimizations:
-    - Save clipboard data on background context
-    - Use fault objects to load binary data on-demand
-    - Set up fetch request templates with proper indexing
+    - [DONE]Save clipboard data on background context
+    - [????] Use fault objects to load binary data on-demand
+    - [????]Set up fetch request templates with proper indexing
 
  3. Implementation Strategy:
     - Store metadata separately from binary content
@@ -364,39 +364,25 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
 }
 
 /// Holds information about the application that was the source of a clipboard item
-/// The applicationIcon is excluded from equality/hash operations as NSImage
-/// may not consistently implement these operations across macOS versions
 struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
     let id = UUID()
     let bundleIdentifier: String?
     let applicationName: String?
-    // Store the raw icon data instead of the NSImage
-    private let applicationIconData: Data?
 
-    // Lazy load the icon only when needed
+    // Retrieve the icon using the bundle identifier when needed
     var applicationIcon: NSImage? {
-        if let iconData = applicationIconData {
-            return NSImage(data: iconData)
+        guard let bundleId = bundleIdentifier,
+            let appBundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId),
+            let bundle = Bundle(url: appBundle)
+        else {
+            return nil
         }
-        return nil
+        return NSWorkspace.shared.icon(forFile: bundle.bundlePath)
     }
 
-    init(bundleIdentifier: String?, applicationName: String?, applicationIconData: Data?) {
+    init(bundleIdentifier: String?, applicationName: String?) {
         self.bundleIdentifier = bundleIdentifier
         self.applicationName = applicationName
-        self.applicationIconData = applicationIconData
-    }
-
-    // For backward compatibility
-    init(bundleIdentifier: String?, applicationName: String?, applicationIcon: NSImage?) {
-        self.bundleIdentifier = bundleIdentifier
-        self.applicationName = applicationName
-        // Extract data from provided NSImage if any
-        if let icon = applicationIcon, let tiffData = icon.tiffRepresentation {
-            self.applicationIconData = tiffData
-        } else {
-            self.applicationIconData = nil
-        }
     }
 
     static func == (lhs: SourceApplicationInfo, rhs: SourceApplicationInfo) -> Bool {
@@ -637,8 +623,7 @@ class ClipboardMonitor: ObservableObject {
         if let frontmostApp = NSWorkspace.shared.frontmostApplication {
             sourceAppInfo = SourceApplicationInfo(
                 bundleIdentifier: frontmostApp.bundleIdentifier,
-                applicationName: frontmostApp.localizedName,
-                applicationIconData: frontmostApp.icon?.tiffRepresentation
+                applicationName: frontmostApp.localizedName
             )
             self.logger.info(
                 "Presumed source application: \(frontmostApp.localizedName ?? "Unknown")")

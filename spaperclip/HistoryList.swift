@@ -10,6 +10,7 @@ import SwiftUI
 struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     @ObservedObject var monitor: ClipboardMonitor
+    @State private var previewText: String = "(Loading...)"
 
     var body: some View {
         contentCard
@@ -17,6 +18,31 @@ struct HistoryItemRow: View {
             .contextMenu {
                 contextMenu
             }
+            .task {
+                // Load text preview efficiently from first 100 characters
+                await loadPreviewText()
+            }
+    }
+
+    private func loadPreviewText() async {
+        // Check each content in the item for text representation
+        for content in item.contents {
+            // Try to get just the first 100 characters using efficient chunking
+            if let (chunk, _) = content.getTextChunk(offset: 0, length: 100) {
+                // We found text content, use it for the preview
+                if chunk.isEmpty {
+                    self.previewText = "(Empty)"
+                } else if chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.previewText = "(Whitespace only)"
+                } else {
+                    self.previewText = chunk
+                }
+                return
+            }
+        }
+
+        // If we get here, no text representation was found
+        self.previewText = "(Unsupported format)"
     }
 
     // MARK: - Component Parts
@@ -76,7 +102,7 @@ struct HistoryItemRow: View {
                     .help(monitor.getSourceAppNameForHistoryItem(item))
             }
 
-            Text(item.textRepresentation.map { $0.truncated() } ?? "(Unsupported format)")
+            Text(previewText)
                 .font(.system(.caption))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
