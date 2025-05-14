@@ -2,12 +2,16 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var clipboardMonitor = ClipboardMonitor()
+    @ObservedObject var clipboardMonitor: ClipboardMonitor
+    @State private var detailWidth: CGFloat = 300
+    @State private var minDetailWidth: CGFloat = 250
 
     var body: some View {
-        NavigationSplitView {
+        HSplitView {
+            // History list - the main focus of the app
             ZStack {
                 HistoryListView(monitor: clipboardMonitor)
+                    .frame(minWidth: 250, idealWidth: 350)
 
                 if clipboardMonitor.isLoadingHistory {
                     VStack {
@@ -21,12 +25,31 @@ struct ContentView: View {
                     .background(Color(NSColor.windowBackgroundColor).opacity(0.8))
                 }
             }
-        } detail: {
-            ClipboardDetailView(
-                monitor: clipboardMonitor,
-            )
+
+            // Detail view (resizable but can be minimized, not hidden)
+            ClipboardDetailView(monitor: clipboardMonitor)
+                .frame(minWidth: minDetailWidth, idealWidth: detailWidth)
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
+        .toolbar {
+            // Main toolbar title/info in the navigation area
+            ToolbarItem(placement: .principal) {
+                ToolbarMetadataView(monitor: clipboardMonitor)
+            }
+
+            // Copy button
+            ToolbarItem {
+                Button {
+                    if let item = clipboardMonitor.selectedHistoryItem {
+                        Utilities.copyAllContentTypes(from: item)
+                    }
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .disabled(clipboardMonitor.selectedHistoryItem == nil)
+                .help("Copy to Clipboard")
+            }
+        }
+        .navigationTitle("sPaperClip")
         .onDisappear {
             clipboardMonitor.stopMonitoring()
         }

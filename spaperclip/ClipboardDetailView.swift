@@ -8,6 +8,73 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Toolbar Metadata View
+
+struct ToolbarMetadataView: View {
+    @ObservedObject var monitor: ClipboardMonitor
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // App icon
+            Image(systemName: "paperclip")
+                .foregroundColor(.accentColor)
+
+            // App name
+            Text("sPaperClip")
+                .fontWeight(.semibold)
+
+            // Selected item info
+            if let item = monitor.selectedHistoryItem {
+                Divider()
+
+                // Show timestamp
+                Text(Utilities.formatDate(item.timestamp))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                // Show source app if available
+                if let sourceApp = item.sourceApplication,
+                    let name = sourceApp.applicationName,
+                    !name.isEmpty
+                {
+                    Text("•")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text(name)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                // Show current indicator if applicable
+                if monitor.currentItemID == item.id {
+                    Spacer().frame(width: 8)
+
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+
+                    Text("Current")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
+// Helper extension for debug coloring
+extension Color {
+    static var random: Color {
+        Color(
+            red: Double.random(in: 0...1),
+            green: Double.random(in: 0...1),
+            blue: Double.random(in: 0...1)
+        )
+    }
+}
+
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
 
@@ -18,55 +85,6 @@ struct ClipboardDetailView: View {
     var body: some View {
         if let item = monitor.selectedHistoryItem {
             VStack(spacing: 4) {
-                // Header
-                HStack {
-                    if monitor.currentItemID == item.id {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
-                        Text("Current")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-
-                    Text(Utilities.formatDate(item.timestamp))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if let sourceApp = item.sourceApplication {
-                        Spacer().frame(width: 8)
-
-                        HStack {
-                            if let nsImage = sourceApp.applicationIcon {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 16, height: 16)
-                            }
-
-                            if let appName = sourceApp.applicationName, !appName.isEmpty {
-                                Text(appName)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(4)
-                        .contentShape(Rectangle())
-                        .help(sourceApp.bundleIdentifier ?? "Unknown application")
-                    }
-
-                    Spacer()
-
-                    Button(action: {
-                        Utilities.copyAllContentTypes(from: item)
-                    }) {
-                        Image(systemName: "doc.on.doc")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Copy to Clipboard")
-                }
-                .padding([.horizontal, .top], 4)
-
                 // Content groups as tabs
                 if !item.contents.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {

@@ -15,12 +15,13 @@ import SwiftUI
 struct ClipboardViewerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var menuBarManager = MenuBarManager.shared
+    @StateObject private var clipboardMonitor = ClipboardMonitor()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(clipboardMonitor: clipboardMonitor)
                 .frame(minWidth: 600, minHeight: 400)
-                .onChange(of: scenePhase) { oldPhase, newPhase in
+                .onChange(of: scenePhase) { newPhase in
                     if newPhase == .background || newPhase == .inactive {
                         // Save Core Data context when app moves to background
                         CoreDataManager.shared.saveViewContext()
