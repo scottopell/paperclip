@@ -202,23 +202,30 @@ struct HistoryItemRow: View {
 @available(macOS 14.0, *)
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
-    @State private var searchText: String = ""
+    @State private var internalSearchText: String = ""
     @State private var debouncedSearchText: String = ""
     var showSearchBar: Bool = true
+    var externalSearchText: String? = nil  // Optional external search text
 
     // Add a timer publisher for debouncing
     private let searchTextPublisher = PassthroughSubject<String, Never>()
     @State private var cancellable: AnyCancellable?
 
     var filteredHistory: [ClipboardHistoryItem] {
-        if debouncedSearchText.isEmpty {
+        // Use external search text if provided and search bar is hidden
+        let effectiveSearchText =
+            !showSearchBar && externalSearchText != nil
+            ? externalSearchText!
+            : debouncedSearchText
+
+        if effectiveSearchText.isEmpty {
             return monitor.history
         } else {
             return monitor.history.filter { item in
                 guard let itemText = item.textRepresentation else {
                     return false
                 }
-                return itemText.localizedCaseInsensitiveContains(debouncedSearchText)
+                return itemText.localizedCaseInsensitiveContains(effectiveSearchText)
             }
         }
     }
@@ -268,7 +275,7 @@ struct HistoryListView: View {
                 HStack {
                     // Use NSSearchField for native macOS look and feel
                     SearchField(
-                        searchText: $searchText,
+                        searchText: $internalSearchText,
                         placeholder: "Search clipboard history...",
                         onSearchTextChanged: { newText in
                             searchTextPublisher.send(newText)
@@ -288,7 +295,11 @@ struct HistoryListView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Text("No results matching '\(debouncedSearchText)'")
+                            let displaySearchText =
+                                !showSearchBar && externalSearchText != nil
+                                ? externalSearchText!
+                                : debouncedSearchText
+                            Text("No results matching '\(displaySearchText)'")
                                 .italic()
                                 .font(.caption)
                                 .foregroundColor(.secondary)

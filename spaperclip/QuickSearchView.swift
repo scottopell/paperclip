@@ -1,11 +1,17 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct QuickSearchView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @State private var searchText: String = ""
+    @State private var debouncedSearchText: String = ""
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isSearchFieldFocused: Bool
+
+    // Add a timer publisher for debouncing
+    private let searchTextPublisher = PassthroughSubject<String, Never>()
+    @State private var cancellable: AnyCancellable?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,10 +24,14 @@ struct QuickSearchView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 18))
                     .focused($isSearchFieldFocused)
+                    .onChange(of: searchText) { newValue in
+                        searchTextPublisher.send(newValue)
+                    }
 
                 if !searchText.isEmpty {
                     Button(action: {
                         searchText = ""
+                        searchTextPublisher.send("")
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -40,9 +50,11 @@ struct QuickSearchView: View {
             .padding([.horizontal, .top], 16)
 
             // History list
-            HistoryListView(monitor: monitor, showSearchBar: false)
-                .padding([.horizontal, .bottom], 16)
-                .padding(.top, 8)
+            HistoryListView(
+                monitor: monitor, showSearchBar: false, externalSearchText: debouncedSearchText
+            )
+            .padding([.horizontal, .bottom], 16)
+            .padding(.top, 8)
         }
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
@@ -54,6 +66,14 @@ struct QuickSearchView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isSearchFieldFocused = true
             }
+
+            // Setup the debounced search
+            cancellable =
+                searchTextPublisher
+                .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+                .sink { value in
+                    debouncedSearchText = value
+                }
         }
         .onKeyPress(.escape) {
             QuickSearchManager.shared.hideQuickSearch()
