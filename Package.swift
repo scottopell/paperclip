@@ -9,10 +9,13 @@ let package = Package(
     products: [
         .executable(name: "spaperclip", targets: ["spaperclip"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.3.0")
+    ],
     targets: [
         .executableTarget(
             name: "spaperclip",
+            dependencies: ["KeyboardShortcuts"],
             path: "spaperclip",
             resources: [
                 .process("Assets.xcassets"),

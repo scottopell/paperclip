@@ -204,6 +204,7 @@ struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @State private var searchText: String = ""
     @State private var debouncedSearchText: String = ""
+    var showSearchBar: Bool = true
 
     // Add a timer publisher for debouncing
     private let searchTextPublisher = PassthroughSubject<String, Never>()
@@ -263,17 +264,19 @@ struct HistoryListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // Search field - always at the top
-            HStack {
-                // Use NSSearchField for native macOS look and feel
-                SearchField(
-                    searchText: $searchText,
-                    placeholder: "Search clipboard history...",
-                    onSearchTextChanged: { newText in
-                        searchTextPublisher.send(newText)
-                    }
-                )
+            if showSearchBar {
+                HStack {
+                    // Use NSSearchField for native macOS look and feel
+                    SearchField(
+                        searchText: $searchText,
+                        placeholder: "Search clipboard history...",
+                        onSearchTextChanged: { newText in
+                            searchTextPublisher.send(newText)
+                        }
+                    )
+                }
+                .padding(.bottom, 4)
             }
-            .padding(.bottom, 4)
 
             // Always show the ScrollView container regardless of content
             ScrollView {

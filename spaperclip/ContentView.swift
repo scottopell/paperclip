@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var clipboardMonitor = ClipboardMonitor()
+    @ObservedObject var clipboardMonitor: ClipboardMonitor
 
     var body: some View {
         NavigationSplitView {

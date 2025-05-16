@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import KeyboardShortcuts
 import SwiftUI
 
 // MARK: - App
@@ -15,10 +16,12 @@ import SwiftUI
 struct ClipboardViewerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var menuBarManager = MenuBarManager.shared
+    @StateObject private var quickSearchManager = QuickSearchManager.shared
+    @StateObject private var sharedClipboardMonitor = ClipboardMonitor()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(clipboardMonitor: sharedClipboardMonitor)
                 .frame(minWidth: 600, minHeight: 400)
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     if newPhase == .background || newPhase == .inactive {
@@ -29,6 +32,8 @@ struct ClipboardViewerApp: App {
                 .onAppear {
                     // Setup the menu bar item
                     menuBarManager.setupMenuBar()
+                    // Pass shared monitor to QuickSearchManager
+                    quickSearchManager.setSharedMonitor(sharedClipboardMonitor)
                 }
         }
         .windowStyle(.titleBar)
@@ -43,10 +48,22 @@ struct ClipboardViewerApp: App {
 
                 Divider()
 
+                Button("Quick Search") {
+                    quickSearchManager.toggleQuickSearch()
+                }
+
+                Divider()
+
                 Button("Database Statistics") {
                     StatsWindowController.shared.showStatsWindow()
                 }
                 .keyboardShortcut("D", modifiers: [.command, .option])
+            }
+
+            CommandMenu("Preferences") {
+                Button("Keyboard Shortcuts") {
+                    KeyboardShortcutsManager.shared.showPreferences()
+                }
             }
         }
     }
