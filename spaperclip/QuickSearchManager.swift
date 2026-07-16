@@ -4,111 +4,111 @@ import SwiftUI
 
 extension KeyboardShortcuts.Name {
     static let toggleQuickSearch = Self(
-        "toggleQuickSearch", default: .init(.space, modifiers: [.command, .shift]))
+        "toggleQuickSearch", default: .init(.space, modifiers: [.control, .option]))
 }
 
-/// Manages the quick search functionality
-class QuickSearchManager: ObservableObject {
+private final class QuickSearchPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Owns the global shortcut and the reusable Quick Search panel.
+@MainActor
+final class QuickSearchManager: ObservableObject {
     static let shared = QuickSearchManager()
 
-    @Published var isQuickSearchVisible = false
+    @Published private(set) var isQuickSearchVisible = false
+    @Published private(set) var presentationID = UUID()
+
     private var window: NSPanel?
     private var sharedClipboardMonitor: ClipboardMonitor?
+    private var isShortcutRegistered = false
 
-    private init() {
-        setupKeyboardShortcut()
-    }
+    private init() {}
 
-    private func setupKeyboardShortcut() {
-        KeyboardShortcuts.onKeyDown(for: .toggleQuickSearch) { [weak self] in
-            self?.toggleQuickSearch()
-        }
-    }
-
+    /// Installs the monitor before enabling the shortcut, so invocation can never race setup.
     func setSharedMonitor(_ monitor: ClipboardMonitor) {
-        self.sharedClipboardMonitor = monitor
+        sharedClipboardMonitor = monitor
+        guard !isShortcutRegistered else { return }
+
+        KeyboardShortcuts.onKeyDown(for: .toggleQuickSearch) { [weak self] in
+            Task { @MainActor in
+                self?.toggleQuickSearch()
+            }
+        }
+        isShortcutRegistered = true
     }
 
     func toggleQuickSearch() {
-        if let window = self.window, window.isVisible {
-            hideQuickSearch()
-        } else {
-            showQuickSearch()
-        }
+        isQuickSearchVisible ? hideQuickSearch() : showQuickSearch()
     }
 
     func showQuickSearch() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            guard let monitor = self.sharedClipboardMonitor else {
-                print("Error: Shared ClipboardMonitor not set in QuickSearchManager")
-                return
-            }
+        guard let monitor = sharedClipboardMonitor else { return }
 
-            if let window = self.window {
-                NSApp.activate(ignoringOtherApps: true)  // Ensure app is active
-                window.alphaValue = 1.0  // Reset alpha value
-                window.center()  // Recenter if already exists
-                window.orderFront(nil)  // Bring to front
-                window.makeKey()  // Make window key explicitly
-                self.isQuickSearchVisible = true  // Update visibility state
-                return
-            }
+        let panel = window ?? makePanel(monitor: monitor)
+        window = panel
 
-            let quickSearchView = QuickSearchView(monitor: monitor)
-            let hostingController = NSHostingController(rootView: quickSearchView)
+        panel.alphaValue = 1
+        positionOnActiveScreen(panel)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        isQuickSearchVisible = true
 
-            let window = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-                styleMask: [.titled, .closable, .resizable],  // Allow becoming key
-                backing: .buffered,
-                defer: false
-            )
-
-            window.titleVisibility = .hidden  // Hide the title bar
-            window.titlebarAppearsTransparent = true  // Make titlebar transparent
-            window.isFloatingPanel = true  // Makes it float above other windows
-            window.becomesKeyOnlyIfNeeded = false  // Crucial: allows the panel to become key
-            window.acceptsMouseMovedEvents = true
-
-            window.level = .floating  // Keep it above most other windows
-            window.isOpaque = false  // Necessary for transparency and custom shapes
-            window.backgroundColor = .clear  // Let the SwiftUI view define the background
-            window.hasShadow = true  // Add a system shadow to the borderless window
-            window.isMovableByWindowBackground = true  // Allow dragging
-            // Behavior for spaces and fullscreen apps.
-            // .moveToActiveSpace is typically implicit with .canJoinAllSpaces when shown.
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-            window.contentView = hostingController.view
-            window.center()
-
-            // If QuickSearchView itself has a rounded background (e.g., via its VisualEffectView),
-            // this helps ensure the window corners clip correctly.
-            hostingController.view.wantsLayer = true
-            hostingController.view.layer?.masksToBounds = true
-            // For explicit corner radius on the window content, you might apply it to the hostingController.view.layer
-            // e.g., hostingController.view.layer?.cornerRadius = 12 // Adjust as needed
-
-            self.window = window
-            NSApp.activate(ignoringOtherApps: true)  // Activate app
-            window.orderFront(nil)  // Show window
-            window.makeKey()  // Make window key explicitly
-
-            self.isQuickSearchVisible = true
-        }
+        // A new ID defines a new search session. Publishing it after the panel is
+        // key lets the view reset query, selection, and focus without a timer.
+        presentationID = UUID()
     }
 
     func hideQuickSearch() {
-        guard let window = self.window else { return }
-
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.current.duration = 0.2
-        NSAnimationContext.current.completionHandler = {
-            window.orderOut(nil)
-            self.isQuickSearchVisible = false
+        guard let panel = window, panel.isVisible else {
+            isQuickSearchVisible = false
+            return
         }
-        window.animator().alphaValue = 0.0
-        NSAnimationContext.endGrouping()
+
+        // Immediate ordering avoids stale animation completions hiding a newly reopened panel.
+        panel.orderOut(nil)
+        isQuickSearchVisible = false
+    }
+
+    private func positionOnActiveScreen(_ panel: NSPanel) {
+        let pointerLocation = NSEvent.mouseLocation
+        let activeScreen = NSScreen.screens.first { NSMouseInRect(pointerLocation, $0.frame, false) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let visibleFrame = activeScreen?.visibleFrame else { return }
+
+        let origin = NSPoint(
+            x: visibleFrame.midX - panel.frame.width / 2,
+            y: visibleFrame.midY - panel.frame.height / 2
+        )
+        panel.setFrameOrigin(origin)
+    }
+
+    private func makePanel(monitor: ClipboardMonitor) -> NSPanel {
+        let quickSearchView = QuickSearchView(monitor: monitor, manager: self)
+        let hostingController = NSHostingController(rootView: quickSearchView)
+        let panel = QuickSearchPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        panel.title = "Quick Search"
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.acceptsMouseMovedEvents = true
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentViewController = hostingController
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.cornerRadius = 14
+        hostingController.view.layer?.masksToBounds = true
+        return panel
     }
 }

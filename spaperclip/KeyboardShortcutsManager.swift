@@ -1,62 +1,140 @@
-import AppKit
+import Carbon.HIToolbox
 import KeyboardShortcuts
 import SwiftUI
 
-/// Manages keyboard shortcut preferences
-class KeyboardShortcutsManager {
-    static let shared = KeyboardShortcutsManager()
-    private var preferencesWindow: NSWindow?
+@MainActor
+final class LayoutAwareShortcutManager {
+    static let shared = LayoutAwareShortcutManager()
+
+    private let characterDefaultsKey = "QuickSearchShortcutCharacter"
+    private var observers: [NSObjectProtocol] = []
+    private var isStarted = false
 
     private init() {}
 
-    func showPreferences() {
-        // If window exists, just bring it to front
-        if let window = preferencesWindow, window.isVisible {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+    func start() {
+        guard !isStarted else { return }
+        isStarted = true
+
+        let inputSourceNotification = Notification.Name(
+            kTISNotifySelectedKeyboardInputSourceChanged as String
+        )
+        observers.append(
+            DistributedNotificationCenter.default().addObserver(
+                forName: inputSourceNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.applyCurrentLayout() }
+            }
+        )
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSTextInputContext.keyboardSelectionDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.applyCurrentLayout() }
+            }
+        )
+
+        applyCurrentLayout()
+    }
+
+    func shortcutDidChange(_ shortcut: KeyboardShortcuts.Shortcut?) {
+        guard let shortcut else {
+            UserDefaults.standard.removeObject(forKey: characterDefaultsKey)
             return
         }
 
-        // Create a new window
-        let preferencesView = KeyboardShortcutsView()
-        let hostingController = NSHostingController(rootView: preferencesView)
+        if let character = Self.character(forKeyCode: shortcut.carbonKeyCode) {
+            UserDefaults.standard.set(
+                String(character).lowercased(),
+                forKey: characterDefaultsKey
+            )
+        } else {
+            UserDefaults.standard.removeObject(forKey: characterDefaultsKey)
+        }
+    }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
+    private func applyCurrentLayout() {
+        guard let intendedCharacter = UserDefaults.standard.string(forKey: characterDefaultsKey),
+            intendedCharacter.count == 1,
+            let currentShortcut = KeyboardShortcuts.getShortcut(for: .toggleQuickSearch),
+            let mappedKeyCode = Self.keyCode(for: Character(intendedCharacter)),
+            mappedKeyCode != currentShortcut.carbonKeyCode
+        else {
+            return
+        }
+
+        KeyboardShortcuts.setShortcut(
+            .init(
+                carbonKeyCode: mappedKeyCode,
+                carbonModifiers: currentShortcut.carbonModifiers
+            ),
+            for: .toggleQuickSearch
         )
+    }
 
-        window.title = "Keyboard Shortcuts"
-        window.contentView = hostingController.view
-        window.center()
+    static func keyCode(for character: Character) -> Int? {
+        let target = String(character).lowercased()
+        return (0..<128).first { keyCode in
+            self.character(forKeyCode: keyCode).map { String($0).lowercased() } == target
+        }
+    }
 
-        self.preferencesWindow = window
+    static func character(forKeyCode keyCode: Int) -> Character? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+            let layoutDataPointer = TISGetInputSourceProperty(
+                source,
+                kTISPropertyUnicodeKeyLayoutData
+            )
+        else {
+            return nil
+        }
 
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        let layoutData = unsafeBitCast(layoutDataPointer, to: CFData.self)
+        guard let bytes = CFDataGetBytePtr(layoutData) else { return nil }
+        let keyboardLayout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var deadKeyState: UInt32 = 0
+        var characters = [UniChar](repeating: 0, count: 4)
+        var length = 0
+        let status = UCKeyTranslate(
+            keyboardLayout,
+            UInt16(keyCode),
+            UInt16(kUCKeyActionDisplay),
+            0,
+            UInt32(LMGetKbdType()),
+            OptionBits(kUCKeyTranslateNoDeadKeysBit),
+            &deadKeyState,
+            characters.count,
+            &length,
+            &characters
+        )
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: characters, count: length).first
     }
 }
 
-struct KeyboardShortcutsView: View {
+struct ShortcutSettingsView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Configure Keyboard Shortcuts")
-                .font(.headline)
-                .padding(.bottom, 8)
-
-            VStack(alignment: .leading) {
-                Text("Quick Search:")
-                    .font(.subheadline)
-
-                KeyboardShortcuts.Recorder(for: .toggleQuickSearch)
-                    .padding(.leading, 8)
+        Form {
+            LabeledContent("Quick Search") {
+                KeyboardShortcuts.Recorder(
+                    for: .toggleQuickSearch,
+                    onChange: LayoutAwareShortcutManager.shared.shortcutDidChange
+                )
+                .accessibilityIdentifier("settings.quick-search-shortcut")
             }
 
-            Spacer()
+            Text("This shortcut follows the selected character when you switch keyboard layouts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 400, minHeight: 200)
+        .frame(width: 460, height: 180)
+        .navigationTitle("Shortcuts")
+        .accessibilityIdentifier("settings.shortcuts")
     }
 }

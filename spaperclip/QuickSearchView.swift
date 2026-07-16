@@ -4,6 +4,7 @@ import SwiftUI
 
 struct QuickSearchView: View {
     @ObservedObject var monitor: ClipboardMonitor
+    @ObservedObject var manager: QuickSearchManager
     @State private var searchText: String = ""
     @State private var debouncedSearchText: String = ""
     @Environment(\.colorScheme) private var colorScheme
@@ -12,6 +13,10 @@ struct QuickSearchView: View {
     // Add a timer publisher for debouncing
     private let searchTextPublisher = PassthroughSubject<String, Never>()
     @State private var cancellable: AnyCancellable?
+
+    private var filteredHistory: [ClipboardHistoryItem] {
+        ClipboardHistoryFilter.matching(monitor.history, searchText: debouncedSearchText)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +32,19 @@ struct QuickSearchView: View {
                     .accessibilityIdentifier("quick-search.field")
                     .onChange(of: searchText) { _, newValue in
                         searchTextPublisher.send(newValue)
+                    }
+                    .onKeyPress(.upArrow) {
+                        moveSelection(by: -1)
+                    }
+                    .onKeyPress(.downArrow) {
+                        moveSelection(by: 1)
+                    }
+                    .onKeyPress(.return) {
+                        restoreSelection()
+                    }
+                    .onKeyPress(.escape) {
+                        manager.hideQuickSearch()
+                        return .handled
                     }
 
                 if !searchText.isEmpty {
@@ -55,7 +73,8 @@ struct QuickSearchView: View {
                 monitor: monitor,
                 showSearchBar: false,
                 externalSearchText: debouncedSearchText,
-                onItemCopied: { QuickSearchManager.shared.hideQuickSearch() }
+                onItemCopied: { manager.hideQuickSearch() },
+                accessibilityPrefix: "quick-search"
             )
             .padding([.horizontal, .bottom], 16)
             .padding(.top, 8)
@@ -66,23 +85,59 @@ struct QuickSearchView: View {
         )
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
-            // Set focus to search field
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                isSearchFieldFocused = true
-            }
-
-            // Setup the debounced search
             cancellable =
                 searchTextPublisher
                 .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
                 .sink { value in
                     debouncedSearchText = value
+                    let matches = ClipboardHistoryFilter.matching(
+                        monitor.history,
+                        searchText: value
+                    )
+                    monitor.selectHistoryItem(matches.first)
                 }
         }
+        .task(id: manager.presentationID) {
+            searchText = ""
+            debouncedSearchText = ""
+            monitor.selectHistoryItem(monitor.history.first)
+            isSearchFieldFocused = false
+            await Task.yield()
+            isSearchFieldFocused = true
+        }
+        .onDisappear {
+            cancellable?.cancel()
+            cancellable = nil
+        }
         .onKeyPress(.escape) {
-            QuickSearchManager.shared.hideQuickSearch()
+            manager.hideQuickSearch()
             return .handled
         }
+    }
+
+    private func moveSelection(by offset: Int) -> KeyPress.Result {
+        guard !filteredHistory.isEmpty else { return .handled }
+
+        let currentIndex = monitor.selectedHistoryItem.flatMap { selected in
+            filteredHistory.firstIndex(where: { $0.id == selected.id })
+        } ?? 0
+        let nextIndex = min(max(currentIndex + offset, 0), filteredHistory.count - 1)
+        monitor.selectHistoryItem(filteredHistory[nextIndex])
+        return .handled
+    }
+
+    private func restoreSelection() -> KeyPress.Result {
+        guard let selected = monitor.selectedHistoryItem,
+            filteredHistory.contains(where: { $0.id == selected.id })
+        else {
+            return .handled
+        }
+
+        let copied = NSEvent.modifierFlags.contains(.shift)
+            ? monitor.copyPlainTextOnly(selected)
+            : monitor.copyAllContentTypes(selected)
+        if copied { manager.hideQuickSearch() }
+        return .handled
     }
 }
 

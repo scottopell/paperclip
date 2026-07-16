@@ -39,6 +39,20 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testLayoutAwareShortcutFindsPrintableCharacterKeyCode() {
+        guard let keyCode = LayoutAwareShortcutManager.keyCode(for: "s") else {
+            return XCTFail("Expected the active keyboard layout to contain s")
+        }
+
+        XCTAssertEqual(
+            LayoutAwareShortcutManager.character(forKeyCode: keyCode).map {
+                String($0).lowercased()
+            },
+            "s"
+        )
+    }
+
     func testLegacyImagePasteboardTypesHaveCompactLabels() {
         XCTAssertEqual(ClipboardFormat(uti: "NeXT TIFF v4.0 pasteboard type").shortTypeName, "TIFF")
         XCTAssertEqual(ClipboardFormat(uti: "Apple PNG pasteboard type").shortTypeName, "PNG")

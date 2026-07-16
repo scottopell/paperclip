@@ -77,21 +77,26 @@ xcodebuild \
   AD_HOC_CODE_SIGNING_ALLOWED=YES \
   -only-testing:spaperclipUITests/spaperclipUITests/testLaunchShowsEmptyClipboardHistory \
   -only-testing:spaperclipUITests/spaperclipUITests/testCaptureSearchAndRestoreText \
+  -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchKeyboardJourney \
+  -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchPlainTextRestore \
   test
 ```
 
 The app uses a separate, freshly reset Core Data store when `SPAPERCLIP_UI_TEST_ID` is supplied by these tests, so UI automation does not read or clear normal clipboard history. Do not set `CODE_SIGNING_ALLOWED=NO` for UI tests: macOS cannot launch an unsigned XCUITest runner.
 
+XCUITest reliably covers the same Quick Search panel through its menu command, including focus, filtering, navigation, restore, reinvocation, and dismissal. macOS does not deliver the library's global hotkey from XCUITest's synthetic Finder keystroke, so the configured shortcut from another app remains one manual acceptance check.
+
 ## Quick Search
 
 1. Keep sPaperclip running.
-2. Press **Cmd+Shift+Space** from any application.
+2. Press **Control+Option+Space** from any application (the default).
 3. Type to filter clipboard history.
 4. Use the arrow keys to select a result.
 5. Press **Enter** to copy every captured representation, or **Shift+Enter** for plain text only.
 6. Press **Escape** to dismiss without copying.
 
-Change the shortcut under **Preferences → Keyboard Shortcuts**.
+Change or clear the shortcut under **sPaperclip → Settings…** (`Cmd+,`).
+Printable-key shortcuts follow their character when switching keyboard layouts (for example, `S` remains `S` between US and Dvorak). After upgrading from an older build, record the shortcut once more so sPaperClip can remember the intended character.
 
 ## Current limitations
 
