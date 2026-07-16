@@ -7,6 +7,12 @@
 import Combine
 import SwiftUI
 
+enum ClipboardHistoryPreview {
+    static func fallbackText(for item: ClipboardHistoryItem) -> String {
+        item.hasImageRepresentation ? "(Image)" : "(Unsupported format)"
+    }
+}
+
 struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     @ObservedObject var monitor: ClipboardMonitor
@@ -41,8 +47,8 @@ struct HistoryItemRow: View {
             }
         }
 
-        // If we get here, no text representation was found
-        self.previewText = "(Unsupported format)"
+        // Images are previewed in the detail pane, but have no text for the history row.
+        self.previewText = ClipboardHistoryPreview.fallbackText(for: item)
     }
 
     // MARK: - Component Parts

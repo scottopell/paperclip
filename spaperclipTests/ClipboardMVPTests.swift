@@ -39,6 +39,36 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    func testImageHistoryPreviewIsLabeledAsImage() {
+        let imageContent = ClipboardContent(
+            data: Data([0x89, 0x50, 0x4E, 0x47]),
+            formats: [ClipboardFormat(uti: "public.png")],
+            description: "PNG image"
+        )
+        let item = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: [imageContent],
+            sourceApplication: nil
+        )
+
+        XCTAssertEqual(ClipboardHistoryPreview.fallbackText(for: item), "(Image)")
+    }
+
+    func testUnknownHistoryPreviewRemainsUnsupported() {
+        let content = ClipboardContent(
+            data: Data([0x00]),
+            formats: [ClipboardFormat(uti: "com.example.unknown")],
+            description: "Unknown"
+        )
+        let item = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: [content],
+            sourceApplication: nil
+        )
+
+        XCTAssertEqual(ClipboardHistoryPreview.fallbackText(for: item), "(Unsupported format)")
+    }
+
     func testCopyAllContentTypesWritesToPasteboard() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("spaperclip-tests-\(UUID())"))
         defer { pasteboard.releaseGlobally() }
