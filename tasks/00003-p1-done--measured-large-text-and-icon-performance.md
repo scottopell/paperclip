@@ -42,3 +42,19 @@ Treat **22.33 ms eliminated per 100 repeated resolutions** as the meaningful res
 - Loaded text is byte/character-equivalent for supported inputs; rapid selection cannot display stale content.
 - Existing unit tests pass.
 - Any candidate that misses its gate is reverted rather than justified speculatively.
+
+## Delivered evidence
+
+Hardware: Apple M1 Max. Implementation commit: pending final task commit on `task-00003-measured-large-text-and-icon-performance`; baseline commit: `c6f0521`.
+
+Exploratory optimized before/after measurements:
+
+- 1 MB old chunk/rebuild/sleep path median: **1591.28 ms**; single decode/assignment candidate median: **5.90 ms** (**269.6x**).
+- 100 uncached Finder icon reads median: **22.33 ms**; cached synthetic reads were below timer resolution.
+
+Production-path XCTest gates (Debug host required by ad-hoc signing, one warmup, five serial samples):
+
+- 1 MB decode plus `NSTextView` assignment: 36.03, 36.34, 35.72, 36.07, 36.11 ms; median **36.07 ms**, below the 160 ms gate and **44.1x** below the optimized baseline.
+- 100 cached icon reads: 0.387, 0.372, 0.372, 0.379, 0.368 ms; median **0.372 ms**, below the 2.25 ms gate and **60.0x** below baseline.
+
+The Release app compiles successfully. Release XCTest execution is unavailable under workspace ad-hoc signing because macOS rejects the test bundle/host Team ID mismatch; the README documents the reproducible signed Debug-host command and this limitation.

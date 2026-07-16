@@ -62,6 +62,26 @@ xcodebuild \
   test
 ```
 
+Run the focused performance gates (one warmup plus five raw samples per workload):
+
+```sh
+xcodebuild \
+  -project spaperclip.xcodeproj \
+  -scheme spaperclip \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  DEVELOPMENT_TEAM= \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY=- \
+  AD_HOC_CODE_SIGNING_ALLOWED=YES \
+  -parallel-testing-enabled NO \
+  -only-testing:spaperclipTests/PerformanceTests \
+  test
+```
+
+The performance tests print their configuration, raw samples, and median. Use a consistent machine and configuration for comparisons. The ad-hoc workspace cannot load the project's Release test bundle because macOS requires its host and test bundle to have matching development-team signatures; optimized standalone measurements established the original baseline and candidate, while these production-path XCTest gates provide repeatable regression limits.
+
 Run the accessibility-driven UI tests with local ad-hoc signing:
 
 ```sh
