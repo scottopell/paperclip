@@ -221,6 +221,7 @@ struct HistoryListView: View {
     @State private var debouncedSearchText: String = ""
     var showSearchBar: Bool = true
     var externalSearchText: String? = nil  // Optional external search text
+    var filteredHistoryOverride: [ClipboardHistoryItem]? = nil
     var onItemCopied: () -> Void = {}
     var accessibilityPrefix: String = "clipboard"
 
@@ -229,6 +230,8 @@ struct HistoryListView: View {
     @State private var cancellable: AnyCancellable?
 
     var filteredHistory: [ClipboardHistoryItem] {
+        if let filteredHistoryOverride { return filteredHistoryOverride }
+
         // Use external search text if provided and search bar is hidden
         let effectiveSearchText =
             !showSearchBar && externalSearchText != nil
