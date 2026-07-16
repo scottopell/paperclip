@@ -6,14 +6,12 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
 
-    // Local state for content and format selection
+    // A clipboard item may contain distinct data representations, such as TIFF and PNG.
     @State private var selectedContent: ClipboardContent?
-    @State private var selectedFormat: ClipboardFormat?
 
     var body: some View {
         if let item = monitor.selectedHistoryItem {
@@ -97,39 +95,9 @@ struct ClipboardDetailView: View {
                         .padding(.bottom, 4)
                     }
 
-                    // Format picker - only show if the selected content has multiple formats
-                    if let selectedContent = selectedContent,
-                        selectedContent.formats.count > 1
-                    {
-                        HStack {
-                            Text("Format:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Picker(
-                                "",
-                                selection: Binding<ClipboardFormat?>(
-                                    get: { selectedFormat },
-                                    set: { selectFormat($0) }
-                                )
-                            ) {
-                                ForEach(selectedContent.formats) { format in
-                                    Text(format.typeName).tag(format as ClipboardFormat?)
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            Spacer()
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 4)
-                    }
-
                     // Content view
-                    if let selectedContent = selectedContent,
-                        let selectedFormat = selectedFormat
-                    {
-                        contentView(for: selectedContent, selectedFormat: selectedFormat)
+                    if let selectedContent = selectedContent {
+                        contentView(for: selectedContent)
                     } else {
                         Text("No content selected")
                             .foregroundColor(.secondary)
@@ -168,7 +136,6 @@ struct ClipboardDetailView: View {
     private func updateSelectionForItem(_ item: ClipboardHistoryItem?) {
         guard let item = item, !item.contents.isEmpty else {
             selectedContent = nil
-            selectedFormat = nil
             return
         }
 
@@ -187,46 +154,8 @@ struct ClipboardDetailView: View {
         }
     }
 
-    /// Selects a content and updates format selection accordingly
     private func selectContent(_ content: ClipboardContent?) {
         selectedContent = content
-
-        guard let content = content else {
-            selectedFormat = nil
-            return
-        }
-
-        // If current format is in the new content, keep it selected
-        if let currentFormat = selectedFormat,
-            content.formats.contains(where: { $0.id == currentFormat.id })
-        {
-            // Format is still valid, keep it selected
-        } else {
-            // Default to text format if available, otherwise first format
-            if content.canRenderAsText {
-                if let textFormat = content.formats.first(where: {
-                    $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
-                }) {
-                    selectedFormat = textFormat
-                } else {
-                    selectedFormat = content.formats.first
-                }
-            } else {
-                selectedFormat = content.formats.first
-            }
-        }
-    }
-
-    /// Selects a format, ensuring it belongs to the selected content
-    private func selectFormat(_ format: ClipboardFormat?) {
-        guard let format = format,
-            let content = selectedContent,
-            content.formats.contains(where: { $0.id == format.id })
-        else {
-            return
-        }
-
-        selectedFormat = format
     }
 
     @ViewBuilder
@@ -244,9 +173,7 @@ struct ClipboardDetailView: View {
     }
 
     @ViewBuilder
-    private func contentView(for content: ClipboardContent, selectedFormat: ClipboardFormat)
-        -> some View
-    {
+    private func contentView(for content: ClipboardContent) -> some View {
         VStack(spacing: 4) {
             // Preview section
             Group {
@@ -336,11 +263,11 @@ struct ClipboardDetailView: View {
 
                 HStack {
                     VStack(alignment: .leading) {
-                        HStack {
-                            Text("UTI:")
+                        HStack(alignment: .top) {
+                            Text(content.formats.count == 1 ? "Format:" : "Formats:")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                            Text(selectedFormat.uti)
+                            Text(content.formats.map(\.uti).joined(separator: "\n"))
                                 .font(.caption2)
                                 .textSelection(.enabled)
                         }
@@ -362,26 +289,6 @@ struct ClipboardDetailView: View {
                     }
 
                     Spacer()
-
-                    // Show alternative formats as buttons
-                    if content.formats.count > 1 {
-                        VStack(alignment: .trailing) {
-                            Text("Other formats:")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-
-                            HStack {
-                                ForEach(content.formats.filter { $0.id != selectedFormat.id }) {
-                                    format in
-                                    Button(format.typeName) {
-                                        selectFormat(format)
-                                    }
-                                    .font(.caption2)
-                                    .buttonStyle(.link)
-                                }
-                            }
-                        }
-                    }
                 }
             }
             .padding(8)
@@ -393,29 +300,14 @@ struct ClipboardDetailView: View {
 
     // Generate better, more specific tab labels for content
     private func getContentTabLabel(_ content: ClipboardContent) -> String {
-        if content.formats.count == 1 {
-            return content.formats[0].typeName
+        let names = content.formats.map(\.shortTypeName).reduce(into: [String]()) { result, name in
+            if !result.contains(name) { result.append(name) }
         }
+        let representation = names.joined(separator: "/")
 
-        // Create more specific labels for content with multiple formats
-        if content.canRenderAsText {
-            // For text types, include the specific formats
-            let formatNames = content.formats.prefix(2).map {
-                $0.typeName.replacingOccurrences(of: " Text", with: "")
-            }
-            let additionalCount = content.formats.count > 2 ? " +\(content.formats.count - 2)" : ""
-            return "Text (\(formatNames.joined(separator: "/"))\(additionalCount))"
-        } else if content.canRenderAsImage {
-            // For image types, include the specific formats
-            let formatNames = content.formats.prefix(2).map {
-                $0.typeName.replacingOccurrences(of: " Image", with: "")
-            }
-            let additionalCount = content.formats.count > 2 ? " +\(content.formats.count - 2)" : ""
-            return "Image (\(formatNames.joined(separator: "/"))\(additionalCount))"
-        } else {
-            // For other types, show data size
-            return "Data (\(content.data.count) bytes)"
-        }
+        if content.canRenderAsImage { return representation }
+        if content.canRenderAsText { return representation }
+        return representation.isEmpty ? "Data" : representation
     }
 
     private func asciiRepresentation(of data: Data) -> String {

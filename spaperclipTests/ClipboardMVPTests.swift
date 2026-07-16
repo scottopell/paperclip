@@ -39,6 +39,11 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    func testLegacyImagePasteboardTypesHaveCompactLabels() {
+        XCTAssertEqual(ClipboardFormat(uti: "NeXT TIFF v4.0 pasteboard type").shortTypeName, "TIFF")
+        XCTAssertEqual(ClipboardFormat(uti: "Apple PNG pasteboard type").shortTypeName, "PNG")
+    }
+
     func testImageHistoryPreviewIsLabeledAsImage() {
         let imageContent = ClipboardContent(
             data: Data([0x89, 0x50, 0x4E, 0x47]),

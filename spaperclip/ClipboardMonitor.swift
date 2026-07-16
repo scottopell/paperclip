@@ -71,6 +71,21 @@ struct ClipboardFormat: Identifiable, Hashable {
             return uti
         }
     }
+
+    /// A compact label for representation selectors.
+    var shortTypeName: String {
+        let normalizedUTI = uti.lowercased()
+        if normalizedUTI.contains("png") { return "PNG" }
+        if normalizedUTI.contains("tiff") { return "TIFF" }
+        if normalizedUTI.contains("jpeg") || normalizedUTI.contains("jpg") { return "JPEG" }
+        if normalizedUTI.contains("pdf") { return "PDF" }
+        if normalizedUTI.contains("html") { return "HTML" }
+        if normalizedUTI.contains("rtf") { return "Rich Text" }
+        if normalizedUTI.contains("text") || normalizedUTI.contains("string") { return "Plain Text" }
+        if normalizedUTI.contains("file-url") { return "File URL" }
+        if normalizedUTI.contains("url") { return "URL" }
+        return typeName
+    }
 }
 
 /// Represents a single piece of data from the clipboard with its available formats
