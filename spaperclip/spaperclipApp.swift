@@ -23,6 +23,7 @@ struct ClipboardViewerApp: App {
         let monitor = ClipboardMonitor()
         _sharedClipboardMonitor = StateObject(wrappedValue: monitor)
         QuickSearchManager.shared.setSharedMonitor(monitor)
+        LayoutAwareShortcutManager.shared.start()
     }
 
     var body: some Scene {
@@ -66,11 +67,10 @@ struct ClipboardViewerApp: App {
                 .keyboardShortcut("D", modifiers: [.command, .option])
             }
 
-            CommandMenu("Preferences") {
-                Button("Keyboard Shortcuts") {
-                    KeyboardShortcutsManager.shared.showPreferences()
-                }
-            }
+        }
+
+        Settings {
+            ShortcutSettingsView()
         }
     }
 }

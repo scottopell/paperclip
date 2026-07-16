@@ -222,6 +222,7 @@ struct HistoryListView: View {
     var showSearchBar: Bool = true
     var externalSearchText: String? = nil  // Optional external search text
     var onItemCopied: () -> Void = {}
+    var accessibilityPrefix: String = "clipboard"
 
     // Add a timer publisher for debouncing
     private let searchTextPublisher = PassthroughSubject<String, Never>()
@@ -291,7 +292,7 @@ struct HistoryListView: View {
                             searchTextPublisher.send(newText)
                         }
                     )
-                    .accessibilityIdentifier("clipboard.search")
+                    .accessibilityIdentifier("\(accessibilityPrefix).search")
                 }
                 .padding(.bottom, 4)
             }
@@ -302,7 +303,7 @@ struct HistoryListView: View {
                     VStack {
                         if monitor.history.isEmpty {
                             Text("No clipboard history yet. Copy something!")
-                                .accessibilityIdentifier("clipboard.empty-state")
+                                .accessibilityIdentifier("\(accessibilityPrefix).empty-state")
                                 .italic()
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -324,7 +325,7 @@ struct HistoryListView: View {
                         ForEach(Array(filteredHistory.enumerated()), id: \.element.id) {
                             index, item in
                             HistoryItemRow(item: item, monitor: monitor)
-                                .accessibilityIdentifier("clipboard.history.item")
+                                .accessibilityIdentifier("\(accessibilityPrefix).history.item")
                                 .contentShape(Rectangle())
                                 .background(
                                     monitor.selectedHistoryItem?.id == item.id
@@ -340,7 +341,7 @@ struct HistoryListView: View {
                 }
             }
             .background(Color(NSColor.textBackgroundColor).opacity(0.3))
-            .accessibilityIdentifier("clipboard.history")
+            .accessibilityIdentifier("\(accessibilityPrefix).history")
             .cornerRadius(6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)  // Align to top
