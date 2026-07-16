@@ -11,7 +11,8 @@ class MenuBarManager: ObservableObject {
     private init() {}
 
     /// Sets up the menu bar item with the statistics view
-    func setupMenuBar() {
+    func setupMenuBar(clipboardMonitor: ClipboardMonitor) {
+        guard statusItem == nil else { return }
         // Create the status item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -30,7 +31,7 @@ class MenuBarManager: ObservableObject {
         popover?.animates = true
 
         // Set the SwiftUI view as content
-        let contentView = CoreDataStatsView()
+        let contentView = CoreDataStatsView(onClearHistory: clipboardMonitor.clearHistory)
         popover?.contentViewController = NSHostingController(rootView: contentView)
     }
 

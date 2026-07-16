@@ -5,6 +5,7 @@
 //  Created by Scott Opell on 5/3/25.
 //
 
+import AppKit
 import XCTest
 
 final class spaperclipUITests: XCTestCase {
@@ -23,12 +24,57 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testLaunchShowsEmptyClipboardHistory() throws {
         let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
         app.launch()
+        app.activate()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10),
+            "Expected the clipboard history surface to appear after launch"
+        )
+        XCTAssertTrue(
+            app.staticTexts["clipboard.empty-state"].waitForExistence(timeout: 5),
+            "Expected a fresh UI-test store to start with empty history"
+        )
+    }
+
+    @MainActor
+    func testCaptureSearchAndRestoreText() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
+        app.launch()
+        app.activate()
+
+        let history = app.descendants(matching: .any)["clipboard.history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 10))
+
+        let capturedText = "XCUITest clipboard \(UUID().uuidString)"
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString(capturedText, forType: .string))
+
+        let capturedRow = app.staticTexts[capturedText]
+        XCTAssertTrue(
+            capturedRow.waitForExistence(timeout: 5),
+            "Expected clipboard polling to add the copied text to history"
+        )
+
+        let searchField = app.searchFields["clipboard.search"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
+        searchField.click()
+        searchField.typeText("XCUITest clipboard")
+        XCTAssertTrue(capturedRow.waitForExistence(timeout: 2))
+
+        NSPasteboard.general.clearContents()
+        searchField.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string),
+            capturedText,
+            "Enter should restore the selected history item to the pasteboard"
+        )
     }
 
     @MainActor

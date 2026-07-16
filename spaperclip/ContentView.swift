@@ -27,8 +27,5 @@ struct ContentView: View {
             )
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
-        .onDisappear {
-            clipboardMonitor.stopMonitoring()
-        }
     }
 }

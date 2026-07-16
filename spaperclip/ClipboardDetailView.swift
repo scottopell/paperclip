@@ -58,7 +58,7 @@ struct ClipboardDetailView: View {
                     Spacer()
 
                     Button(action: {
-                        Utilities.copyAllContentTypes(from: item)
+                        monitor.copyAllContentTypes(item)
                     }) {
                         Image(systemName: "doc.on.doc")
                     }

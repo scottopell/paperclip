@@ -1,48 +1,102 @@
-# SPaperClip
-
-## Build Releasable Thing
-### Create .app
-`xcodebuild -scheme spaperclip -configuration Release -derivedDataPath build`
-
-Your .app will be in `build/Build/Products/Release/spaperclip.app`
-
-
-
-### Create DMG
-`hdiutil create -volname "spaperclip" -srcfolder build/Build/Products/Release/spaperclip.app -ov -format UDZO spaperclip.dmg`
-
-Your .dmg will be in `./spaperclip.dmg`
-
 # sPaperclip
 
-sPaperclip is a powerful clipboard manager for macOS that helps you keep track of your clipboard history.
+sPaperclip is a small macOS clipboard-history app. While it is running, it records up to 100 recent clipboard items, persists them locally, and lets you search and restore them.
 
-## Features
+## MVP features
 
-- Clipboard history tracking with metadata (source app, timestamp)
-- Detailed clipboard content view with support for various formats
-- **Quick Search**: Global keyboard shortcut to access clipboard history from anywhere
-- Menu bar item for quick access to statistics
-- Core Data persistence for reliable clipboard history storage
-
-## Quick Search
-
-The new Quick Search feature allows you to access your clipboard history from anywhere with a global keyboard shortcut, similar to Spotlight:
-
-1. Press **Cmd+Shift+Space** (default) to open the Quick Search window
-2. Type to search through your clipboard history
-3. Use arrow keys to navigate through the results
-4. Press Enter to select and copy an item
-5. Press Esc to dismiss the window
-
-You can customize the keyboard shortcut in Preferences → Keyboard Shortcuts.
+- Clipboard history with timestamp and best-effort source-app metadata
+- Local Core Data persistence across app launches
+- Text, image, PDF, URL, and other pasteboard-format capture
+- Search in the main window
+- Quick Search from other apps with a configurable global shortcut
+- Full-format copy with Enter; plain-text-only copy with Shift+Enter
+- Menu bar access to storage statistics and history clearing
 
 ## Requirements
 
 - macOS 15.0 or later
+- Xcode 16 or later to build from source
 
-## Building from Source
+sPaperclip must be running to monitor the clipboard or respond to its global shortcut. Launch at login is not part of the current MVP.
 
-1. Clone the repository
-2. Open the project in Xcode
-3. Build and run the project
+## Build from source
+
+The Xcode project is the authoritative build. It resolves the pinned `KeyboardShortcuts` Swift package automatically.
+
+```sh
+xcodebuild \
+  -project spaperclip.xcodeproj \
+  -scheme spaperclip \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  build
+```
+
+For a release app:
+
+```sh
+xcodebuild \
+  -project spaperclip.xcodeproj \
+  -scheme spaperclip \
+  -configuration Release \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  build
+```
+
+The release product is `.build/DerivedData/Build/Products/Release/spaperclip.app`.
+
+## Tests
+
+Run unit tests without launching the UI-test runner:
+
+```sh
+xcodebuild \
+  -project spaperclip.xcodeproj \
+  -scheme spaperclip \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  -only-testing:spaperclipTests \
+  test
+```
+
+Run the accessibility-driven UI tests with local ad-hoc signing:
+
+```sh
+xcodebuild \
+  -project spaperclip.xcodeproj \
+  -scheme spaperclip \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/XCUITestDerivedData \
+  DEVELOPMENT_TEAM= \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY=- \
+  AD_HOC_CODE_SIGNING_ALLOWED=YES \
+  -only-testing:spaperclipUITests/spaperclipUITests/testLaunchShowsEmptyClipboardHistory \
+  -only-testing:spaperclipUITests/spaperclipUITests/testCaptureSearchAndRestoreText \
+  test
+```
+
+The app uses a separate, freshly reset Core Data store when `SPAPERCLIP_UI_TEST_ID` is supplied by these tests, so UI automation does not read or clear normal clipboard history. Do not set `CODE_SIGNING_ALLOWED=NO` for UI tests: macOS cannot launch an unsigned XCUITest runner.
+
+## Quick Search
+
+1. Keep sPaperclip running.
+2. Press **Cmd+Shift+Space** from any application.
+3. Type to filter clipboard history.
+4. Use the arrow keys to select a result.
+5. Press **Enter** to copy every captured representation, or **Shift+Enter** for plain text only.
+6. Press **Escape** to dismiss without copying.
+
+Change the shortcut under **Preferences → Keyboard Shortcuts**.
+
+## Current limitations
+
+- History is capped at 100 items.
+- Source application detection is best effort.
+- Large rich-text/HTML values may have limited previews even though their pasteboard data is retained.
+- The app is not configured to launch at login.
+- Distribution signing, notarization, and DMG packaging are not automated.

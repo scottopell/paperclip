@@ -29,8 +29,17 @@ class CoreDataManager {
         let fileManager = FileManager.default
         let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
-        let storeURL = appSupportURL.appendingPathComponent("spaperclip").appendingPathComponent(
+        let processEnvironment = ProcessInfo.processInfo.environment
+        let uiTestID = processEnvironment["SPAPERCLIP_UI_TEST_ID"]
+        let storeDirectoryName = uiTestID.map { "spaperclip-ui-tests-\($0)" } ?? "spaperclip"
+        let storeURL = appSupportURL.appendingPathComponent(storeDirectoryName).appendingPathComponent(
             "clipboard.sqlite")
+
+        if uiTestID != nil {
+            for suffix in ["", "-shm", "-wal"] {
+                try? fileManager.removeItem(atPath: storeURL.path + suffix)
+            }
+        }
 
         // Create directory if it doesn't exist
         let storeDirectory = storeURL.deletingLastPathComponent()

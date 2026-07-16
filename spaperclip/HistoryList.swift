@@ -165,13 +165,13 @@ struct HistoryItemRow: View {
                 ForEach(item.contents) { content in
                     if content.formats.count == 1 {
                         Button(content.formats[0].typeName) {
-                            Utilities.copyToClipboard(content)
+                            monitor.copyContent(content)
                         }
                     } else {
                         Menu(getContentMenuLabel(content)) {
                             ForEach(content.formats) { format in
                                 Button(format.typeName) {
-                                    Utilities.copyToClipboard(content)
+                                    monitor.copyContent(content)
                                 }
                             }
                         }
@@ -181,7 +181,7 @@ struct HistoryItemRow: View {
                 Divider()
 
                 Button("Copy All Content Types") {
-                    Utilities.copyAllContentTypes(from: item)
+                    monitor.copyAllContentTypes(item)
                 }
             }
         }
@@ -199,6 +199,15 @@ struct HistoryItemRow: View {
 
 }
 
+enum ClipboardHistoryFilter {
+    static func matching(_ history: [ClipboardHistoryItem], searchText: String) -> [ClipboardHistoryItem] {
+        guard !searchText.isEmpty else { return history }
+        return history.filter { item in
+            item.textRepresentation?.localizedCaseInsensitiveContains(searchText) == true
+        }
+    }
+}
+
 @available(macOS 14.0, *)
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
@@ -206,6 +215,7 @@ struct HistoryListView: View {
     @State private var debouncedSearchText: String = ""
     var showSearchBar: Bool = true
     var externalSearchText: String? = nil  // Optional external search text
+    var onItemCopied: () -> Void = {}
 
     // Add a timer publisher for debouncing
     private let searchTextPublisher = PassthroughSubject<String, Never>()
@@ -218,16 +228,10 @@ struct HistoryListView: View {
             ? externalSearchText!
             : debouncedSearchText
 
-        if effectiveSearchText.isEmpty {
-            return monitor.history
-        } else {
-            return monitor.history.filter { item in
-                guard let itemText = item.textRepresentation else {
-                    return false
-                }
-                return itemText.localizedCaseInsensitiveContains(effectiveSearchText)
-            }
-        }
+        return ClipboardHistoryFilter.matching(
+            monitor.history,
+            searchText: effectiveSearchText
+        )
     }
 
     // Get the selected item directly from the monitor
@@ -281,6 +285,7 @@ struct HistoryListView: View {
                             searchTextPublisher.send(newText)
                         }
                     )
+                    .accessibilityIdentifier("clipboard.search")
                 }
                 .padding(.bottom, 4)
             }
@@ -291,6 +296,7 @@ struct HistoryListView: View {
                     VStack {
                         if monitor.history.isEmpty {
                             Text("No clipboard history yet. Copy something!")
+                                .accessibilityIdentifier("clipboard.empty-state")
                                 .italic()
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -312,6 +318,7 @@ struct HistoryListView: View {
                         ForEach(Array(filteredHistory.enumerated()), id: \.element.id) {
                             index, item in
                             HistoryItemRow(item: item, monitor: monitor)
+                                .accessibilityIdentifier("clipboard.history.item")
                                 .contentShape(Rectangle())
                                 .background(
                                     monitor.selectedHistoryItem?.id == item.id
@@ -327,6 +334,7 @@ struct HistoryListView: View {
                 }
             }
             .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+            .accessibilityIdentifier("clipboard.history")
             .cornerRadius(6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)  // Align to top
@@ -372,19 +380,19 @@ struct HistoryListView: View {
             return .ignored
         }
         .onKeyPress(.return) {
-            // TODO confirm this works, I'm not seeing any clipboard updates
             guard let item = selectedItem else {
                 return .ignored
             }
 
+            let copied: Bool
             if NSEvent.modifierFlags.contains(.shift) {
-                // Shift+Enter: Copy only plain text if available
-                if item.textRepresentation != nil {
-                    monitor.copyPlainTextOnly(item)
-                }
+                copied = monitor.copyPlainTextOnly(item)
             } else {
-                // Enter: Copy all content types
-                monitor.selectHistoryItem(item)
+                copied = monitor.copyAllContentTypes(item)
+            }
+
+            if copied {
+                onItemCopied()
             }
             return .handled
         }

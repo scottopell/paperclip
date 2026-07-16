@@ -466,8 +466,6 @@ class ClipboardMonitor: ObservableObject {
             guard let self = self else { return }
 
             DispatchQueue.main.async {
-                // Notify SwiftUI before making changes
-                self.objectWillChange.send()
                 self.isLoadingHistory = false
 
                 if !loadedItems.isEmpty {
@@ -494,12 +492,13 @@ class ClipboardMonitor: ObservableObject {
 
     func startMonitoring() {
         DispatchQueue.main.async { [weak self] in
-            self?.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
+            guard let self, self.timer == nil else { return }
+            self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
                 [weak self] _ in
                 self?.checkClipboard()
             }
+            self.logger.info("Clipboard monitoring started")
         }
-        logger.info("Clipboard monitoring started")
     }
 
     func stopMonitoring() {
@@ -510,9 +509,10 @@ class ClipboardMonitor: ObservableObject {
 
     func clearHistory() {
         history.removeAll()
+        currentItem = nil
+        currentItemID = nil
         selectedHistoryItem = nil
 
-        // Clear persisted history
         persistenceManager.clearAllHistory()
         logger.info("Clipboard history cleared and persistence data removed")
     }
@@ -668,9 +668,6 @@ class ClipboardMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Notify SwiftUI before making changes to avoid intermediate updates
-            self.objectWillChange.send()
-
             let newItem = ClipboardHistoryItem(
                 timestamp: Date(),
                 contents: contents,
@@ -727,23 +724,54 @@ class ClipboardMonitor: ObservableObject {
         }
     }
 
+    /// Copies one content group without recording the app's own write.
+    @discardableResult
+    func copyContent(_ content: ClipboardContent) -> Bool {
+        let pasteboard = NSPasteboard.general
+        guard Utilities.copyToClipboard(content, to: pasteboard) else {
+            logger.warning("Cannot copy content: no representation was written")
+            return false
+        }
+
+        lastChangeCount = pasteboard.changeCount
+        logger.info("Copied content from history item")
+        return true
+    }
+
+    /// Copies all representations of a history item without recording the app's own write.
+    @discardableResult
+    func copyAllContentTypes(_ item: ClipboardHistoryItem) -> Bool {
+        let pasteboard = NSPasteboard.general
+        guard Utilities.copyAllContentTypes(from: item, to: pasteboard) else {
+            logger.warning("Cannot copy history item: no content was written")
+            return false
+        }
+
+        lastChangeCount = pasteboard.changeCount
+        logger.info("Copied all content types from history item")
+        return true
+    }
+
     /// Copies only the plain text representation of a history item to the clipboard
     /// Bypasses the full clipboard data structure to ensure compatibility
     /// with applications that only support plain text
-    func copyPlainTextOnly(_ item: ClipboardHistoryItem) {
+    @discardableResult
+    func copyPlainTextOnly(_ item: ClipboardHistoryItem) -> Bool {
         guard let textRepresentation = item.textRepresentation else {
             logger.warning("Cannot copy plain text: no text representation available")
-            return
+            return false
         }
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(textRepresentation, forType: .string)
+        guard pasteboard.setString(textRepresentation, forType: .string) else {
+            logger.warning("Cannot copy plain text: pasteboard write failed")
+            return false
+        }
 
-        logger.info("Copied plain text only from history item")
-
-        // Update the last change count to prevent the monitor from picking up this change
         lastChangeCount = pasteboard.changeCount
+        logger.info("Copied plain text only from history item")
+        return true
     }
 
     deinit {

@@ -10,7 +10,7 @@ class StatsWindowController {
     private init() {}
 
     /// Shows the statistics window or brings it to front if already open
-    func showStatsWindow() {
+    func showStatsWindow(clipboardMonitor: ClipboardMonitor) {
         // If window exists, just bring it to front
         if let window = self.window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
@@ -27,7 +27,9 @@ class StatsWindowController {
 
         window.title = "Database Statistics"
         window.center()
-        window.contentView = NSHostingView(rootView: CoreDataStatsView())
+        window.contentView = NSHostingView(
+            rootView: CoreDataStatsView(onClearHistory: clipboardMonitor.clearHistory)
+        )
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 400, height: 400)
 

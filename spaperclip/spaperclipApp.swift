@@ -17,7 +17,13 @@ struct ClipboardViewerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var menuBarManager = MenuBarManager.shared
     @StateObject private var quickSearchManager = QuickSearchManager.shared
-    @StateObject private var sharedClipboardMonitor = ClipboardMonitor()
+    @StateObject private var sharedClipboardMonitor: ClipboardMonitor
+
+    init() {
+        let monitor = ClipboardMonitor()
+        _sharedClipboardMonitor = StateObject(wrappedValue: monitor)
+        QuickSearchManager.shared.setSharedMonitor(monitor)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -31,9 +37,7 @@ struct ClipboardViewerApp: App {
                 }
                 .onAppear {
                     // Setup the menu bar item
-                    menuBarManager.setupMenuBar()
-                    // Pass shared monitor to QuickSearchManager
-                    quickSearchManager.setSharedMonitor(sharedClipboardMonitor)
+                    menuBarManager.setupMenuBar(clipboardMonitor: sharedClipboardMonitor)
                 }
         }
         .windowStyle(.titleBar)
@@ -42,7 +46,7 @@ struct ClipboardViewerApp: App {
         .commands {
             CommandMenu("Clipboard") {
                 Button("Clear History") {
-                    ClipboardPersistenceManager.shared.clearAllHistory()
+                    sharedClipboardMonitor.clearHistory()
                 }
                 .keyboardShortcut("K", modifiers: [.command, .shift])
 
@@ -55,7 +59,9 @@ struct ClipboardViewerApp: App {
                 Divider()
 
                 Button("Database Statistics") {
-                    StatsWindowController.shared.showStatsWindow()
+                    StatsWindowController.shared.showStatsWindow(
+                        clipboardMonitor: sharedClipboardMonitor
+                    )
                 }
                 .keyboardShortcut("D", modifiers: [.command, .option])
             }

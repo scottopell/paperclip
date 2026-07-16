@@ -24,7 +24,8 @@ struct QuickSearchView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 18))
                     .focused($isSearchFieldFocused)
-                    .onChange(of: searchText) { newValue in
+                    .accessibilityIdentifier("quick-search.field")
+                    .onChange(of: searchText) { _, newValue in
                         searchTextPublisher.send(newValue)
                     }
 
@@ -51,7 +52,10 @@ struct QuickSearchView: View {
 
             // History list
             HistoryListView(
-                monitor: monitor, showSearchBar: false, externalSearchText: debouncedSearchText
+                monitor: monitor,
+                showSearchBar: false,
+                externalSearchText: debouncedSearchText,
+                onItemCopied: { QuickSearchManager.shared.hideQuickSearch() }
             )
             .padding([.horizontal, .bottom], 16)
             .padding(.top, 8)

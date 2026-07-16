@@ -31,25 +31,41 @@ enum Utilities {
         return str
     }
 
-    /// Copies all content types from a clipboard history item to the system clipboard
-    static func copyAllContentTypes(from item: ClipboardHistoryItem) {
-        let pasteboard = NSPasteboard.general
+    /// Copies all content types from a clipboard history item to a pasteboard.
+    @discardableResult
+    static func copyAllContentTypes(
+        from item: ClipboardHistoryItem,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
         pasteboard.clearContents()
 
+        var copiedAnyContent = false
         for content in item.contents {
             for format in content.formats {
-                pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
+                copiedAnyContent = pasteboard.setData(
+                    content.data,
+                    forType: NSPasteboard.PasteboardType(format.uti)
+                ) || copiedAnyContent
             }
         }
+        return copiedAnyContent
     }
 
-    static func copyToClipboard(_ content: ClipboardContent) {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    static func copyToClipboard(
+        _ content: ClipboardContent,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
         pasteboard.clearContents()
 
+        var copiedAnyContent = false
         for format in content.formats {
-            pasteboard.setData(content.data, forType: NSPasteboard.PasteboardType(format.uti))
+            copiedAnyContent = pasteboard.setData(
+                content.data,
+                forType: NSPasteboard.PasteboardType(format.uti)
+            ) || copiedAnyContent
         }
+        return copiedAnyContent
     }
 }
 

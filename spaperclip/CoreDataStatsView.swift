@@ -2,6 +2,12 @@ import CoreData
 import SwiftUI
 
 struct CoreDataStatsView: View {
+    let onClearHistory: () -> Void
+
+    init(onClearHistory: @escaping () -> Void) {
+        self.onClearHistory = onClearHistory
+    }
+
     @State private var totalItems: Int = 0
     @State private var mainStoreSize: String = "0.00"
     @State private var binaryDataSize: String = "0.00"
@@ -131,7 +137,7 @@ struct CoreDataStatsView: View {
         if let window = NSApplication.shared.windows.first {
             alert.beginSheetModal(for: window) { response in
                 if response == .alertSecondButtonReturn {
-                    coreDataManager.clearAllData()
+                    onClearHistory()
                     // Refresh stats after clearing
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         refreshStats()
