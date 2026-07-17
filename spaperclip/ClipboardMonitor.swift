@@ -283,6 +283,46 @@ struct ClipboardContent: Identifiable, Hashable {
         return nil
     }
 
+    /// Decodes the complete text used by the detail view. This runs off the main
+    /// thread in `LazyTextView`, then AppKit receives a single string assignment.
+    func textForDisplay() -> String? {
+        if formats.contains(where: {
+            $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
+        }) {
+            if let text = String(data: data, encoding: .utf8) { return text }
+            if let text = String(data: data, encoding: .utf16) { return text }
+            return String(data: data, encoding: .ascii)
+        }
+
+        if formats.contains(where: {
+            $0.uti == UTType.rtf.identifier || $0.uti == "public.rtf"
+        }) {
+            return try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil
+            ).string
+        }
+
+        if formats.contains(where: {
+            $0.uti == UTType.html.identifier || $0.uti == "public.html"
+        }) {
+            return try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.html],
+                documentAttributes: nil
+            ).string
+        }
+
+        if formats.contains(where: {
+            $0.uti == UTType.url.identifier || $0.uti == "public.url"
+        }) {
+            return String(data: data, encoding: .utf8)
+        }
+
+        return nil
+    }
+
     /// Gets the entire text representation if possible (backward compatibility)
     func getTextRepresentation() -> String? {
         // For small texts, just load directly
@@ -378,21 +418,52 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     }
 }
 
+/// Resolves source-application icons once per bundle identifier.
+/// `NSCache` bounds memory automatically and is safe to access from multiple threads.
+final class SourceApplicationIconCache {
+    static let shared = SourceApplicationIconCache()
+
+    typealias Loader = (String) -> NSImage?
+
+    private let cache = NSCache<NSString, NSImage>()
+    private let loader: Loader
+
+    init(countLimit: Int = 64, loader: @escaping Loader = SourceApplicationIconCache.loadIcon) {
+        cache.countLimit = countLimit
+        self.loader = loader
+    }
+
+    func icon(for bundleIdentifier: String) -> NSImage? {
+        let key = bundleIdentifier as NSString
+        if let cachedIcon = cache.object(forKey: key) {
+            return cachedIcon
+        }
+
+        guard let icon = loader(bundleIdentifier) else { return nil }
+        cache.setObject(icon, forKey: key)
+        return icon
+    }
+
+    private static func loadIcon(for bundleIdentifier: String) -> NSImage? {
+        guard let appURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleIdentifier)
+        else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(forFile: appURL.path)
+    }
+}
+
 /// Holds information about the application that was the source of a clipboard item
 struct SourceApplicationInfo: Identifiable, Equatable, Hashable {
     let id = UUID()
     let bundleIdentifier: String?
     let applicationName: String?
 
-    // Retrieve the icon using the bundle identifier when needed
+    // Retrieve the icon using the bundle identifier when needed.
     var applicationIcon: NSImage? {
-        guard let bundleId = bundleIdentifier,
-            let appBundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId),
-            let bundle = Bundle(url: appBundle)
-        else {
-            return nil
-        }
-        return NSWorkspace.shared.icon(forFile: bundle.bundlePath)
+        guard let bundleIdentifier else { return nil }
+        return SourceApplicationIconCache.shared.icon(for: bundleIdentifier)
     }
 
     init(bundleIdentifier: String?, applicationName: String?) {

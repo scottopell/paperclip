@@ -33,10 +33,8 @@ class ClipboardPersistenceManager {
                 sourceAppEntity.bundleIdentifier = sourceApp.bundleIdentifier
                 sourceAppEntity.applicationName = sourceApp.applicationName
 
-                // Convert NSImage to Data for storage
-                if let icon = sourceApp.applicationIcon, let tiffData = icon.tiffRepresentation {
-                    sourceAppEntity.applicationIconData = tiffData
-                }
+                // Icons are resolved from the bundle identifier through a shared cache.
+                // Persisting TIFF data per history item duplicates system-owned image data.
 
                 // Create relationship between history item and source app
                 historyItemEntity.sourceApplication = sourceAppEntity
