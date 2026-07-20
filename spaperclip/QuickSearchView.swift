@@ -1,22 +1,22 @@
 import AppKit
-import Combine
 import SwiftUI
+
+enum QuickSearchQuery {
+    static func results(
+        in history: [ClipboardHistoryItem], matching query: String
+    ) -> [ClipboardHistoryItem] {
+        ClipboardHistoryFilter.matching(history, searchText: query)
+    }
+}
 
 struct QuickSearchView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @ObservedObject var manager: QuickSearchManager
     @State private var searchText: String = ""
-    @State private var debouncedSearchText: String = ""
+    @State private var filteredHistory: [ClipboardHistoryItem] = []
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isSearchFieldFocused: Bool
 
-    // Add a timer publisher for debouncing
-    private let searchTextPublisher = PassthroughSubject<String, Never>()
-    @State private var cancellable: AnyCancellable?
-
-    private var filteredHistory: [ClipboardHistoryItem] {
-        ClipboardHistoryFilter.matching(monitor.history, searchText: debouncedSearchText)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +31,7 @@ struct QuickSearchView: View {
                     .focused($isSearchFieldFocused)
                     .accessibilityIdentifier("quick-search.field")
                     .onChange(of: searchText) { _, newValue in
-                        searchTextPublisher.send(newValue)
+                        applyQuery(newValue)
                     }
                     .onKeyPress(.upArrow) {
                         moveSelection(by: -1)
@@ -50,7 +50,6 @@ struct QuickSearchView: View {
                 if !searchText.isEmpty {
                     Button(action: {
                         searchText = ""
-                        searchTextPublisher.send("")
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -72,7 +71,8 @@ struct QuickSearchView: View {
             HistoryListView(
                 monitor: monitor,
                 showSearchBar: false,
-                externalSearchText: debouncedSearchText,
+                externalSearchText: searchText,
+                filteredHistoryOverride: filteredHistory,
                 onItemCopied: { manager.hideQuickSearch() },
                 accessibilityPrefix: "quick-search"
             )
@@ -84,35 +84,30 @@ struct QuickSearchView: View {
                 .edgesIgnoringSafeArea(.all)
         )
         .frame(minWidth: 600, minHeight: 400)
-        .onAppear {
-            cancellable =
-                searchTextPublisher
-                .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
-                .sink { value in
-                    debouncedSearchText = value
-                    let matches = ClipboardHistoryFilter.matching(
-                        monitor.history,
-                        searchText: value
-                    )
-                    monitor.selectHistoryItem(matches.first)
-                }
+        .onChange(of: monitor.history) { _, _ in
+            applyQuery(searchText)
         }
         .task(id: manager.presentationID) {
-            searchText = ""
-            debouncedSearchText = ""
-            monitor.selectHistoryItem(monitor.history.first)
+            if searchText.isEmpty {
+                applyQuery("")
+            } else {
+                searchText = ""
+            }
             isSearchFieldFocused = false
             await Task.yield()
             isSearchFieldFocused = true
-        }
-        .onDisappear {
-            cancellable?.cancel()
-            cancellable = nil
         }
         .onKeyPress(.escape) {
             manager.hideQuickSearch()
             return .handled
         }
+    }
+
+    private func applyQuery(_ query: String) {
+        filteredHistory = QuickSearchQuery.results(
+            in: monitor.history, matching: query
+        )
+        monitor.selectHistoryItem(filteredHistory.first)
     }
 
     private func moveSelection(by offset: Int) -> KeyPress.Result {
