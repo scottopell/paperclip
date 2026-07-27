@@ -100,6 +100,24 @@ Run the full unit suite, focused Quick Search UI tests, and Debug/Release builds
 - Quick Search remains below the 50 ms median query latency gate at the 100-item limit.
 - Existing main-window clipboard workflows and tests remain green.
 
+## Delivered
+
+- Added deterministic, case- and diacritic-insensitive fuzzy ranking with exact/contiguous, word-start, span/gap, and recency priorities.
+- Quick Search synchronously reconciles pending pasteboard changes and selects the actual current item for an empty query.
+- Successful Enter and Shift+Enter restores promote the item in memory and persistence while suppressing self-copy duplicates.
+- Added durable UUID identity to persisted history with inferred lightweight migration for existing stores.
+- Serialized Core Data writes so capture saves cannot be overtaken by immediate promotion updates.
+- Expanded unit and XCUITest coverage for fuzzy matching, selection, keyboard navigation, promotion, reinvocation, and plain-text restore.
+
+Measured Debug query latency for 100 items (one warmup, five raw samples): `0.458, 0.463, 0.471, 0.452, 0.446 ms`; median **0.458 ms**.
+
+Validation completed:
+
+- 35 unit tests pass.
+- Quick Search keyboard journey passes, including fuzzy abbreviation, arrows, promotion, reinvocation, Enter, and Escape.
+- Quick Search Shift+Enter journey passes.
+- Debug and Release builds succeed.
+
 ## Non-goals
 
 - Visual redesign of the panel

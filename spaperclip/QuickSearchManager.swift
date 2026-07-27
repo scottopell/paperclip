@@ -45,6 +45,7 @@ final class QuickSearchManager: ObservableObject {
 
     func showQuickSearch() {
         guard let monitor = sharedClipboardMonitor else { return }
+        monitor.reconcileCurrentPasteboard()
 
         let panel = window ?? makePanel(monitor: monitor)
         window = panel

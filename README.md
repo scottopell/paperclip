@@ -110,9 +110,9 @@ XCUITest reliably covers the same Quick Search panel through its menu command, i
 
 1. Keep sPaperclip running.
 2. Press **Control+Option+Space** from any application (the default).
-3. Type to filter clipboard history.
+3. Type an exact phrase or fuzzy abbreviation to rank matching clipboard history.
 4. Use the arrow keys to select a result.
-5. Press **Enter** to copy every captured representation, or **Shift+Enter** for plain text only.
+5. Press **Enter** to copy every captured representation, or **Shift+Enter** for plain text only. The restored item becomes the current, most-recent history entry.
 6. Press **Escape** to dismiss without copying.
 
 Change or clear the shortcut under **sPaperclip → Settings…** (`Cmd+,`).

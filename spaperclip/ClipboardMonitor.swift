@@ -389,10 +389,33 @@ struct ClipboardContent: Identifiable, Hashable {
 /// Represents a clipboard entry with its timestamp, change count, and available contents
 /// Multiple contents can be present when the clipboard contains data in various formats
 struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
-    let id = UUID()
+    let id: UUID
     let timestamp: Date
     let contents: [ClipboardContent]
     let sourceApplication: SourceApplicationInfo?
+
+    init(
+        id: UUID = UUID(),
+        timestamp: Date,
+        contents: [ClipboardContent],
+        sourceApplication: SourceApplicationInfo?
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.contents = contents
+        self.sourceApplication = sourceApplication
+    }
+
+    /// True when this item can reproduce every representation in a pasteboard capture.
+    /// This treats a plain-text restore from a rich item as the same history entry.
+    func containsRepresentations(from capturedContents: [ClipboardContent]) -> Bool {
+        let available = contents.reduce(into: [String: Data]()) { result, content in
+            for format in content.formats { result[format.uti] = content.data }
+        }
+        return capturedContents.allSatisfy { content in
+            content.formats.allSatisfy { format in available[format.uti] == content.data }
+        }
+    }
 
     var textRepresentation: String? {
         for content in contents {
@@ -415,6 +438,24 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(contents)
         hasher.combine(sourceApplication)
+    }
+}
+
+enum ClipboardHistoryState {
+    static func promoting(
+        _ item: ClipboardHistoryItem,
+        in history: [ClipboardHistoryItem],
+        at timestamp: Date
+    ) -> (item: ClipboardHistoryItem, history: [ClipboardHistoryItem]) {
+        let promoted = ClipboardHistoryItem(
+            id: item.id,
+            timestamp: timestamp,
+            contents: item.contents,
+            sourceApplication: item.sourceApplication
+        )
+        var reordered = history.filter { $0.id != item.id }
+        reordered.insert(promoted, at: 0)
+        return (promoted, reordered)
     }
 }
 
@@ -531,6 +572,7 @@ class ClipboardMonitor: ObservableObject {
                 // After history is loaded, mark startup as complete and start monitoring
                 DispatchQueue.main.async {
                     self?.initialStartupComplete = true
+                    self?.reconcileCurrentPasteboard(force: true)
                     self?.startMonitoring()
                     self?.logger.info("Initial startup complete, monitoring started")
                 }
@@ -634,22 +676,25 @@ class ClipboardMonitor: ObservableObject {
     }
 
     private func checkClipboard() {
+        reconcileCurrentPasteboard()
+    }
+
+    /// Captures an external pasteboard write immediately instead of waiting for the polling timer.
+    /// Quick Search calls this before starting a new presentation session.
+    func reconcileCurrentPasteboard(force: Bool = false) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard initialStartupComplete else {
+            logger.info("Skipping clipboard reconciliation during initial startup")
+            return
+        }
+
         let pasteboard = NSPasteboard.general
         let currentChangeCount = pasteboard.changeCount
+        guard force || currentChangeCount != lastChangeCount else { return }
 
-        if currentChangeCount != lastChangeCount {
-            logger.info("Clipboard changed: \(self.lastChangeCount) -> \(currentChangeCount)")
-            lastChangeCount = currentChangeCount
-
-            // Only process clipboard changes after initial startup is complete
-            if initialStartupComplete {
-                DispatchQueue.main.async { [weak self] in
-                    self?.updateFromClipboard()
-                }
-            } else {
-                logger.info("Skipping clipboard update during initial startup")
-            }
-        }
+        logger.info("Clipboard changed: \(self.lastChangeCount) -> \(currentChangeCount)")
+        lastChangeCount = currentChangeCount
+        updateFromClipboard()
     }
 
     /// Captures clipboard content, groups it by unique data objects,
@@ -751,63 +796,50 @@ class ClipboardMonitor: ObservableObject {
             }
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        let newItem = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: contents,
+            sourceApplication: sourceAppInfo
+        )
 
-            let newItem = ClipboardHistoryItem(
-                timestamp: Date(),
-                contents: contents,
-                sourceApplication: sourceAppInfo
-            )
+        if !contents.isEmpty {
+            if let existingItem = self.history.first(where: {
+                $0.containsRepresentations(from: newItem.contents)
+            }) {
+                let promoted = ClipboardHistoryState.promoting(
+                    existingItem, in: self.history, at: newItem.timestamp)
+                self.history = promoted.history
+                self.currentItem = promoted.item
+                self.currentItemID = promoted.item.id
+                self.selectedHistoryItem = promoted.item
+                self.persistenceManager.promoteHistoryItem(
+                    existingItem, to: promoted.item.timestamp)
 
-            // Update current item reference
-            self.currentItem = newItem
-            self.currentItemID = newItem.id
-
-            if !contents.isEmpty {
-                // Check if this item is a duplicate of any item already in history
-                let isDuplicate = self.history.contains { $0 == newItem }
-
-                if !isDuplicate {
-                    // Insert at beginning (most recent first)
-                    self.history.insert(newItem, at: 0)
-
-                    // Directly update selectedHistoryItem without calling selectHistoryItem method
-                    self.selectedHistoryItem = newItem
-
-                    // Persist the new item to Core Data
-                    self.persistenceManager.saveHistoryItem(newItem)
-
-                } else {
-                    // If it's a duplicate, find the matching item and move it to the top
-
-                    if let index = self.history.firstIndex(where: { $0 == newItem }) {
-                        let existingItem = self.history.remove(at: index)
-                        self.history.insert(existingItem, at: 0)
-
-                        // Directly update selectedHistoryItem without calling selectHistoryItem method
-                        self.selectedHistoryItem = existingItem
-
-                        self.logger.info("Duplicate item detected - moved existing to top")
-                    }
-                }
-
-                // Limit history size to control memory usage
-                // 100 items balances usability with performance
-                if self.history.count > 100 {
-                    self.history = Array(self.history.prefix(100))
-
-                    // Also limit the persisted history size
-                    self.persistenceManager.limitHistorySize(to: 100)
-                }
+                self.logger.info("Duplicate item detected - moved existing to top")
+            } else {
+                // Insert at beginning (most recent first)
+                self.history.insert(newItem, at: 0)
+                self.selectedHistoryItem = newItem
+                self.persistenceManager.saveHistoryItem(newItem)
+                self.currentItem = newItem
+                self.currentItemID = newItem.id
             }
 
-            // Update last change count after processing
-            self.lastChangeCount = pasteboard.changeCount
+            // Limit history size to control memory usage
+            // 100 items balances usability with performance
+            if self.history.count > 100 {
+                self.history = Array(self.history.prefix(100))
 
-            self.logger.info(
-                "UI updated with clipboard content: \(contents.count) content groups")
+                // Also limit the persisted history size
+                self.persistenceManager.limitHistorySize(to: 100)
+            }
         }
+
+        // Update last change count after processing
+        self.lastChangeCount = pasteboard.changeCount
+
+        self.logger.info(
+            "UI updated with clipboard content: \(contents.count) content groups")
     }
 
     /// Copies one content group without recording the app's own write.
@@ -834,6 +866,7 @@ class ClipboardMonitor: ObservableObject {
         }
 
         lastChangeCount = pasteboard.changeCount
+        promoteToCurrent(item)
         logger.info("Copied all content types from history item")
         return true
     }
@@ -856,8 +889,18 @@ class ClipboardMonitor: ObservableObject {
         }
 
         lastChangeCount = pasteboard.changeCount
+        promoteToCurrent(item)
         logger.info("Copied plain text only from history item")
         return true
+    }
+
+    private func promoteToCurrent(_ item: ClipboardHistoryItem) {
+        let promoted = ClipboardHistoryState.promoting(item, in: history, at: Date())
+        history = promoted.history
+        currentItem = promoted.item
+        currentItemID = promoted.item.id
+        selectedHistoryItem = promoted.item
+        persistenceManager.promoteHistoryItem(item, to: promoted.item.timestamp)
     }
 
     deinit {

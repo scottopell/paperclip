@@ -8,6 +8,10 @@ final class CoreDataManager: @unchecked Sendable {
     static let shared = CoreDataManager()
 
     private let logger = Logger(subsystem: "com.scottopell.spaperclip", category: "CoreDataManager")
+    private let backgroundTaskQueue = DispatchQueue(
+        label: "com.scottopell.spaperclip.core-data-writes",
+        qos: .utility
+    )
 
     // MARK: - Core Data stack
 
@@ -60,6 +64,10 @@ final class CoreDataManager: @unchecked Sendable {
         let storeDescription = NSPersistentStoreDescription(url: storeURL)
         storeDescription.setOption(
             true as NSNumber, forKey: "NSPersistentStoreAllowExternalBinaryDataStorageOption")
+        storeDescription.setOption(
+            true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+        storeDescription.setOption(
+            true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
         storeDescription.type = NSSQLiteStoreType
         container.persistentStoreDescriptions = [storeDescription]
 
@@ -113,26 +121,27 @@ final class CoreDataManager: @unchecked Sendable {
     func performBackgroundTask(_ block: @escaping (NSManagedObjectContext) -> Void) {
         logger.info("Starting performBackgroundTask")
 
-        // Create a new background context for each task
-        let backgroundContext = persistentContainer.newBackgroundContext()
-        backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        // Serialize writes so a restore/promotion cannot overtake the item's original save.
+        backgroundTaskQueue.async {
+            let backgroundContext = self.persistentContainer.newBackgroundContext()
+            backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
 
-        logger.info("Created background context: \(backgroundContext)")
+            self.logger.info("Created background context: \(backgroundContext)")
+            backgroundContext.performAndWait {
+                self.logger.info("Executing background context block")
+                block(backgroundContext)
 
-        backgroundContext.perform {
-            self.logger.info("Executing background context block")
-            block(backgroundContext)
-
-            if backgroundContext.hasChanges {
-                do {
-                    try backgroundContext.save()
-                    self.logger.info("Background context saved successfully")
-                } catch {
-                    self.logger.error(
-                        "Failed to save background context: \(error.localizedDescription)")
+                if backgroundContext.hasChanges {
+                    do {
+                        try backgroundContext.save()
+                        self.logger.info("Background context saved successfully")
+                    } catch {
+                        self.logger.error(
+                            "Failed to save background context: \(error.localizedDescription)")
+                    }
+                } else {
+                    self.logger.info("No changes to save in background context")
                 }
-            } else {
-                self.logger.info("No changes to save in background context")
             }
         }
     }

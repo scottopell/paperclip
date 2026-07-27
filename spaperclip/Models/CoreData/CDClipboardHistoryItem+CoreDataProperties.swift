@@ -15,6 +15,7 @@ extension CDClipboardHistoryItem {
         return NSFetchRequest<CDClipboardHistoryItem>(entityName: "CDClipboardHistoryItem")
     }
 
+    @NSManaged public var id: UUID?
     @NSManaged public var timestamp: Date?
     @NSManaged public var contents: NSSet?
     @NSManaged public var sourceApplication: CDSourceApplicationInfo?

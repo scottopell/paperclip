@@ -83,7 +83,8 @@ final class spaperclipUITests: XCTestCase {
         let mainHistory = app.descendants(matching: .any)["clipboard.history"]
         XCTAssertTrue(mainHistory.waitForExistence(timeout: 10))
 
-        let sharedPrefix = "Quick option \(UUID().uuidString.prefix(8))"
+        let uniqueToken = String(UUID().uuidString.prefix(8))
+        let sharedPrefix = "Quick option \(uniqueToken)"
         let olderValue = "\(sharedPrefix) older"
         let newerValue = "\(sharedPrefix) newer"
         capture(olderValue, in: app)
@@ -105,8 +106,9 @@ final class spaperclipUITests: XCTestCase {
         )
         XCTAssertEqual(app.buttons.matching(identifier: "_XCUI:ZoomWindow").count, zoomButtonCount)
 
-        app.typeText(sharedPrefix)
-        XCTAssertEqual(field.value as? String, sharedPrefix)
+        let fuzzyQuery = "qo\(uniqueToken)"
+        app.typeText(fuzzyQuery)
+        XCTAssertEqual(field.value as? String, fuzzyQuery)
         XCTAssertTrue(app.staticTexts[newerValue].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts[olderValue].exists)
 
@@ -117,10 +119,27 @@ final class spaperclipUITests: XCTestCase {
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), olderValue)
         XCTAssertFalse(field.waitForExistence(timeout: 1))
 
-        // Every invocation is a fresh session with an empty, focused query.
+        // Every invocation is a fresh session with an empty query and the restored item first.
         openQuickSearch(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         XCTAssertEqual(field.value as? String, "")
+        let quickHistory = app.descendants(matching: .any)["quick-search.history"]
+        XCTAssertTrue(quickHistory.waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            quickHistory.staticTexts[olderValue].waitForExistence(timeout: 2),
+            "Expected the restored item in the reopened Quick Search history"
+        )
+        NSPasteboard.general.clearContents()
+        field.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string),
+            olderValue,
+            "Reopening and pressing Enter should restore the promoted current item"
+        )
+        XCTAssertFalse(field.waitForExistence(timeout: 1))
+
+        openQuickSearch(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
         let pasteboardBeforeEscape = NSPasteboard.general.string(forType: .string)
         app.typeText("does not mutate clipboard")
         field.typeKey(.escape, modifierFlags: [])
