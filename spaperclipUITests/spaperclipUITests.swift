@@ -129,6 +129,45 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
+    func testDatabaseStatisticsRefreshesOnItsCoreDataQueue() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-com.apple.CoreData.ConcurrencyDebug", "1",
+        ]
+        app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
+        app.launch()
+        app.activate()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10)
+        )
+
+        let statusItem = app.statusItems["stats.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+
+        let stats = app.descendants(matching: .any)["stats.root"]
+        XCTAssertTrue(stats.waitForExistence(timeout: 5))
+        let refresh = app.buttons["Refresh"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Core Data Statistics"].exists)
+
+        for _ in 0..<5 {
+            XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+            if refresh.isEnabled { refresh.click() }
+        }
+
+        XCTAssertTrue(stats.exists)
+
+        statusItem.click()
+        app.menuBars.menuBarItems["Clipboard"].click()
+        app.menuBars.menuItems["Database Statistics"].click()
+        XCTAssertTrue(app.windows["Database Statistics"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Core Data Statistics"].exists)
+    }
+
+    @MainActor
     func testShortcutIsConfigurableInSettings() throws {
         let app = launchIsolatedApp()
         XCTAssertTrue(

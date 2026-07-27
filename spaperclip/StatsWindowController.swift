@@ -27,9 +27,13 @@ class StatsWindowController {
 
         window.title = "Database Statistics"
         window.center()
-        window.contentView = NSHostingView(
+        let hostingController = NSHostingController(
             rootView: CoreDataStatsView(onClearHistory: clipboardMonitor.clearHistory)
         )
+        // The window owns its size. Prevent SwiftUI's changing stats/disclosure content
+        // from resizing the window during AppKit's constraint-update cycle.
+        hostingController.sizingOptions = []
+        window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 400, height: 400)
 

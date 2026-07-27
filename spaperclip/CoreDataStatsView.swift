@@ -56,7 +56,9 @@ struct CoreDataStatsView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("stats.refresh")
                 .controlSize(.small)
+                .disabled(isRefreshing)
 
                 Button(action: clearAllData) {
                     Text("Clear All Data")
@@ -90,37 +92,26 @@ struct CoreDataStatsView: View {
         }
         .padding()
         .frame(width: 400)
+        .accessibilityIdentifier("stats.root")
         .onAppear {
             refreshStats()
         }
     }
 
     private func refreshStats() {
+        guard !isRefreshing else { return }
         isRefreshing = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Get all statistics in one call
-            let stats = coreDataManager.getStoreStatistics()
-
-            // Format date values
-            let newestDateStr =
-                stats.newestItemDate != nil
-                ? dateFormatter.string(from: stats.newestItemDate!) : "N/A"
-            let oldestDateStr =
-                stats.oldestItemDate != nil
-                ? dateFormatter.string(from: stats.oldestItemDate!) : "N/A"
-
-            // Update the UI on the main thread
-            DispatchQueue.main.async {
-                totalItems = stats.totalItems
-                mainStoreSize = stats.formatSize(stats.storeSizeBytes)
-                binaryDataSize = stats.formatSize(stats.binaryDataSizeBytes)
-                storeLocation = stats.storeLocation
-                newestItem = newestDateStr
-                oldestItem = oldestDateStr
-                debugInfo = stats.debugInfo
-                isRefreshing = false
-            }
+        Task {
+            let stats = await coreDataManager.getStoreStatistics()
+            totalItems = stats.totalItems
+            mainStoreSize = stats.formatSize(stats.storeSizeBytes)
+            binaryDataSize = stats.formatSize(stats.binaryDataSizeBytes)
+            storeLocation = stats.storeLocation
+            newestItem = stats.newestItemDate.map(dateFormatter.string) ?? "N/A"
+            oldestItem = stats.oldestItemDate.map(dateFormatter.string) ?? "N/A"
+            debugInfo = stats.debugInfo
+            isRefreshing = false
         }
     }
 

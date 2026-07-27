@@ -20,6 +20,7 @@ class MenuBarManager: ObservableObject {
             button.image = NSImage(
                 systemSymbolName: "chart.bar.doc.horizontal",
                 accessibilityDescription: "sPaperclip Stats")
+            button.setAccessibilityIdentifier("stats.menu-bar")
             button.action = #selector(togglePopover)
             button.target = self
         }

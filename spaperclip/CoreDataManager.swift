@@ -3,7 +3,8 @@ import Foundation
 import OSLog
 
 /// Manages Core Data operations for clipboard history persistence
-class CoreDataManager {
+// NSPersistentContainer is thread-safe; managed contexts remain queue-confined inside this manager.
+final class CoreDataManager: @unchecked Sendable {
     static let shared = CoreDataManager()
 
     private let logger = Logger(subsystem: "com.scottopell.spaperclip", category: "CoreDataManager")
@@ -196,15 +197,13 @@ class CoreDataManager {
     // MARK: - Debugging and Statistics
 
     /// Represents Core Data store statistics
-    struct StoreStatistics {
+    struct StoreStatistics: Sendable {
         let storeLocation: String
         let storeSizeBytes: Int64
         let binaryDataSizeBytes: Int64
         let totalItems: Int
         let oldestItemDate: Date?
         let newestItemDate: Date?
-        let modelName: String?
-        let metadata: [String: Any]
         let debugInfo: String  // Additional debugging info
 
         /// Format a byte size as a mebibyte string
@@ -214,15 +213,24 @@ class CoreDataManager {
         }
     }
 
-    /// Returns comprehensive statistics about the Core Data store
-    func getStoreStatistics() -> StoreStatistics {
+    /// Collects statistics on a private-queue context and returns only value data.
+    /// Managed objects never escape the context's queue.
+    func getStoreStatistics() async -> StoreStatistics {
+        let context = persistentContainer.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        return await context.perform {
+            let stats = self.collectStoreStatistics(in: context)
+            context.reset()
+            return stats
+        }
+    }
+
+    private func collectStoreStatistics(in context: NSManagedObjectContext) -> StoreStatistics {
         var storeLocation = "Unknown"
         var storeSize: Int64 = 0
         var totalItems = 0
         var oldestItemDate: Date? = nil
         var newestItemDate: Date? = nil
-        var modelName: String? = nil
-        var metadata: [String: Any] = [:]
         var debugInfo = ""
 
         // Get total items
@@ -232,11 +240,11 @@ class CoreDataManager {
 
         do {
             // Get item count and dates
-            totalItems = try viewContext.count(for: fetchRequest)
+            totalItems = try context.count(for: fetchRequest)
 
             // Detailed query to inspect actual data sizes
             debugInfo += "--- CONTENT SIZE BREAKDOWN ---\n"
-            let items = try viewContext.fetch(fetchRequest)
+            let items = try context.fetch(fetchRequest)
             newestItemDate = items.first?.timestamp
             oldestItemDate = items.last?.timestamp
 
@@ -334,15 +342,6 @@ class CoreDataManager {
                     debugInfo += "Error listing directory contents: \(error.localizedDescription)\n"
                 }
 
-                // Get additional metadata
-                metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
-                    ofType: store.type, at: storeURL, options: nil)
-
-                if let modelHashes = metadata["NSStoreModelVersionHashes"] as? [String: Any],
-                    let firstModelName = modelHashes.keys.first
-                {
-                    modelName = firstModelName
-                }
             }
 
             let stats = StoreStatistics(
@@ -352,8 +351,6 @@ class CoreDataManager {
                 totalItems: totalItems,
                 oldestItemDate: oldestItemDate,
                 newestItemDate: newestItemDate,
-                modelName: modelName,
-                metadata: metadata,
                 debugInfo: debugInfo
             )
 
@@ -383,8 +380,6 @@ class CoreDataManager {
                 totalItems: totalItems,
                 oldestItemDate: oldestItemDate,
                 newestItemDate: newestItemDate,
-                modelName: modelName,
-                metadata: metadata,
                 debugInfo: debugInfo
             )
         }
