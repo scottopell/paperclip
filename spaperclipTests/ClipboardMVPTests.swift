@@ -224,6 +224,28 @@ final class ClipboardMVPTests: XCTestCase {
             sourceApplication: nil
         )
 
+        XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
         XCTAssertFalse(Utilities.copyAllContentTypes(from: item, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+    }
+
+    func testPlainTextRestoreRejectsImageWithoutClearingPasteboard() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
+        let imageItem = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: [
+                ClipboardContent(
+                    data: Data([0x89, 0x50, 0x4E, 0x47]),
+                    formats: [ClipboardFormat(uti: "public.png")],
+                    description: "PNG image"
+                )
+            ],
+            sourceApplication: nil
+        )
+
+        XCTAssertFalse(Utilities.copyPlainText(from: imageItem, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
     }
 }

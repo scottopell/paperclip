@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Manages the statistics window
+@MainActor
 class StatsWindowController {
     static let shared = StatsWindowController()
 
@@ -14,7 +15,7 @@ class StatsWindowController {
         // If window exists, just bring it to front
         if let window = self.window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return
         }
 
@@ -38,7 +39,7 @@ class StatsWindowController {
         window.minSize = NSSize(width: 400, height: 400)
 
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
 
         self.window = window
     }

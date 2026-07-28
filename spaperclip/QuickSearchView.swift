@@ -264,6 +264,7 @@ struct QuickSearchView: View {
     @ObservedObject var manager: QuickSearchManager
     @State private var searchText: String = ""
     @State private var filteredHistory: [ClipboardHistoryItem] = []
+    @State private var restoreError: String?
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -333,6 +334,16 @@ struct QuickSearchView: View {
             }
             .padding([.horizontal, .bottom], 16)
             .padding(.top, 10)
+
+            if let restoreError {
+                Label(restoreError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 12)
+                    .accessibilityIdentifier("quick-search.restore-error")
+            }
         }
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
@@ -359,6 +370,7 @@ struct QuickSearchView: View {
     }
 
     private func applyQuery(_ query: String) {
+        restoreError = nil
         filteredHistory = QuickSearchQuery.results(
             in: monitor.history, matching: query
         )
@@ -373,6 +385,7 @@ struct QuickSearchView: View {
 
     private func moveSelection(by offset: Int) -> KeyPress.Result {
         guard !filteredHistory.isEmpty else { return .handled }
+        restoreError = nil
 
         let currentIndex = monitor.selectedHistoryItem.flatMap { selected in
             filteredHistory.firstIndex(where: { $0.id == selected.id })
@@ -389,10 +402,18 @@ struct QuickSearchView: View {
             return .handled
         }
 
-        let copied = NSEvent.modifierFlags.contains(.shift)
+        let plainTextOnly = NSEvent.modifierFlags.contains(.shift)
+        let copied = plainTextOnly
             ? monitor.copyPlainTextOnly(selected)
             : monitor.copyAllContentTypes(selected)
-        if copied { manager.hideQuickSearch() }
+        guard copied else {
+            restoreError = plainTextOnly
+                ? "This item has no plain-text representation."
+                : "This item could not be written to the clipboard."
+            return .handled
+        }
+
+        restoreError = manager.pasteIntoInvokingApplication()
         return .handled
     }
 }

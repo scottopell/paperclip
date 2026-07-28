@@ -35,7 +35,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
 
     func showHistory() {
         guard let window else { return }
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.activate()
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
     }

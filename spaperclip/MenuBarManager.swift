@@ -25,9 +25,9 @@ class MenuBarManager: ObservableObject {
 
         if let button = statusItem?.button {
             button.image = NSImage(
-                systemSymbolName: "chart.bar.doc.horizontal",
-                accessibilityDescription: "sPaperclip Stats")
-            button.setAccessibilityIdentifier("stats.menu-bar")
+                systemSymbolName: "paperclip",
+                accessibilityDescription: "Paperclip")
+            button.setAccessibilityIdentifier("paperclip.menu-bar")
         }
 
         let menu = NSMenu()
@@ -43,13 +43,18 @@ class MenuBarManager: ObservableObject {
         ).target = self
         menu.addItem(.separator())
         menu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettingsFromMenu),
+            keyEquivalent: ","
+        ).target = self
+        menu.addItem(
             withTitle: "Database Statistics",
             action: #selector(openStatisticsFromMenu),
             keyEquivalent: ""
         ).target = self
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "Quit sPaperclip",
+            withTitle: "Quit Paperclip",
             action: #selector(quitFromMenu),
             keyEquivalent: "q"
         ).target = self
@@ -63,6 +68,15 @@ class MenuBarManager: ObservableObject {
 
     @objc private func openQuickSearchFromMenu() {
         QuickSearchManager.shared.showQuickSearch()
+    }
+
+    @objc private func openSettingsFromMenu() {
+        NSApplication.shared.sendAction(
+            Selector(("showSettingsWindow:")),
+            to: nil,
+            from: nil
+        )
+        NSApplication.shared.activate()
     }
 
     @objc private func openStatisticsFromMenu() {

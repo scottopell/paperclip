@@ -4,12 +4,15 @@ import SwiftUI
 
 /// Contains common utility functions used throughout the application
 enum Utilities {
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 
     /// Formats a date with a standard timestamp format
     static func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
+        timestampFormatter.string(from: date)
     }
 
     /// Formats a size in bytes or characters with appropriate units (K, M)
@@ -37,6 +40,7 @@ enum Utilities {
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
+        guard item.contents.contains(where: { !$0.formats.isEmpty }) else { return false }
         pasteboard.clearContents()
 
         var copiedAnyContent = false
@@ -52,10 +56,21 @@ enum Utilities {
     }
 
     @discardableResult
+    static func copyPlainText(
+        from item: ClipboardHistoryItem,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard let text = item.textRepresentation else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    @discardableResult
     static func copyToClipboard(
         _ content: ClipboardContent,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
+        guard !content.formats.isEmpty else { return false }
         pasteboard.clearContents()
 
         var copiedAnyContent = false

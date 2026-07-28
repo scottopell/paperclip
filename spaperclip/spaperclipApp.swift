@@ -18,7 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.historyWindowController.showHistory()
             }
         )
-        historyWindowController.showHistory()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

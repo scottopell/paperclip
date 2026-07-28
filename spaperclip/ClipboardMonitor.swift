@@ -876,14 +876,8 @@ class ClipboardMonitor: ObservableObject {
     /// with applications that only support plain text
     @discardableResult
     func copyPlainTextOnly(_ item: ClipboardHistoryItem) -> Bool {
-        guard let textRepresentation = item.textRepresentation else {
-            logger.warning("Cannot copy plain text: no text representation available")
-            return false
-        }
-
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        guard pasteboard.setString(textRepresentation, forType: .string) else {
+        guard Utilities.copyPlainText(from: item, to: pasteboard) else {
             logger.warning("Cannot copy plain text: pasteboard write failed")
             return false
         }
