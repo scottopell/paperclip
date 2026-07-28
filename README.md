@@ -116,6 +116,7 @@ XCUITest reliably covers the same Quick Search panel through its menu command, i
 6. Press **Escape** to dismiss without copying.
 
 Change or clear the shortcut under **sPaperclip → Settings…** (`Cmd+,`).
+Closing Clipboard History hides its AppKit-owned window while sPaperclip keeps monitoring. Use the menu-bar icon to open Clipboard History, Quick Search, Database Statistics, or quit the app.
 Printable-key shortcuts follow their character when switching keyboard layouts (for example, `S` remains `S` between US and Dvorak). After upgrading from an older build, record the shortcut once more so sPaperClip can remember the intended character.
 
 ## Current limitations

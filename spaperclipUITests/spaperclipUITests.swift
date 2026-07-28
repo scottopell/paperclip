@@ -165,6 +165,7 @@ final class spaperclipUITests: XCTestCase {
         let statusItem = app.statusItems["stats.menu-bar"]
         XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
         statusItem.click()
+        app.menuItems["Database Statistics"].click()
 
         let stats = app.descendants(matching: .any)["stats.root"]
         XCTAssertTrue(stats.waitForExistence(timeout: 5))
@@ -179,9 +180,6 @@ final class spaperclipUITests: XCTestCase {
 
         XCTAssertTrue(stats.exists)
 
-        statusItem.click()
-        app.menuBars.menuBarItems["Clipboard"].click()
-        app.menuBars.menuItems["Database Statistics"].click()
         XCTAssertTrue(app.windows["Database Statistics"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Core Data Statistics"].exists)
     }
@@ -247,8 +245,10 @@ final class spaperclipUITests: XCTestCase {
 
     @MainActor
     private func openQuickSearch(in app: XCUIApplication) {
-        app.menuBars.menuBarItems["Clipboard"].click()
-        app.menuBars.menuItems["Quick Search"].click()
+        let statusItem = app.statusItems["stats.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+        app.menuItems["Quick Search"].click()
     }
 
     @MainActor

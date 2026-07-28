@@ -132,6 +132,133 @@ private extension Character {
     }
 }
 
+private struct QuickSearchResultRow: View {
+    let item: ClipboardHistoryItem
+    let isSelected: Bool
+    let isCurrent: Bool
+    let onSelect: () -> Void
+    @State private var preview = "Loading…"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Text(Utilities.formatDate(item.timestamp))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if let appName = item.sourceApplication?.applicationName, !appName.isEmpty {
+                    Text("• \(appName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                if isCurrent {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                        .help("Current clipboard item")
+                }
+            }
+
+            HStack(alignment: .top, spacing: 9) {
+                if let icon = item.sourceApplication?.applicationIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                } else {
+                    Image(systemName: item.hasImageRepresentation ? "photo" : "doc.text")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                }
+
+                Text(preview)
+                    .font(.callout)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isSelected ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.1),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .task(id: item.id) {
+            preview = await Task.detached(priority: .userInitiated) {
+                for content in item.contents {
+                    if let (text, _) = content.getTextChunk(offset: 0, length: 180) {
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { return trimmed }
+                    }
+                }
+                return ClipboardHistoryPreview.fallbackText(for: item)
+            }.value
+        }
+    }
+}
+
+private struct QuickSearchResultsList: View {
+    let items: [ClipboardHistoryItem]
+    @ObservedObject var monitor: ClipboardMonitor
+    let query: String
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                if items.isEmpty {
+                    ContentUnavailableView(
+                        monitor.history.isEmpty ? "No Clipboard History" : "No Matches",
+                        systemImage: "clipboard",
+                        description: Text(
+                            monitor.history.isEmpty
+                                ? "Copy something to get started."
+                                : "No results matching ‘\(query)’."
+                        )
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 260)
+                } else {
+                    LazyVStack(spacing: 8) {
+                        ForEach(items) { item in
+                            QuickSearchResultRow(
+                                item: item,
+                                isSelected: monitor.selectedHistoryItem?.id == item.id,
+                                isCurrent: monitor.currentItemID == item.id,
+                                onSelect: { monitor.selectHistoryItem(item) }
+                            )
+                            .id(item.id)
+                            .accessibilityIdentifier("quick-search.history.item")
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+            .accessibilityIdentifier("quick-search.history")
+            .onChange(of: monitor.selectedHistoryItem?.id) { _, selectedID in
+                guard let selectedID else { return }
+                withAnimation(.easeOut(duration: 0.12)) {
+                    proxy.scrollTo(selectedID, anchor: .center)
+                }
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor).opacity(0.25))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 struct QuickSearchView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @ObservedObject var manager: QuickSearchManager
@@ -190,23 +317,28 @@ struct QuickSearchView: View {
             )
             .padding([.horizontal, .top], 16)
 
-            // History list
-            HistoryListView(
-                monitor: monitor,
-                showSearchBar: false,
-                externalSearchText: searchText,
-                filteredHistoryOverride: filteredHistory,
-                onItemCopied: { manager.hideQuickSearch() },
-                accessibilityPrefix: "quick-search"
-            )
+            HSplitView {
+                QuickSearchResultsList(
+                    items: filteredHistory,
+                    monitor: monitor,
+                    query: searchText
+                )
+                .frame(minWidth: 260, idealWidth: 320, maxWidth: 390)
+
+                ClipboardDetailView(monitor: monitor)
+                    .accessibilityIdentifier("quick-search.preview")
+                    .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(NSColor.textBackgroundColor).opacity(0.18))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
             .padding([.horizontal, .bottom], 16)
-            .padding(.top, 8)
+            .padding(.top, 10)
         }
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
                 .edgesIgnoringSafeArea(.all)
         )
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 820, minHeight: 500)
         .onChange(of: monitor.history) { _, _ in
             applyQuery(searchText)
         }

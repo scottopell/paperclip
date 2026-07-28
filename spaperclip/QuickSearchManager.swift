@@ -90,7 +90,7 @@ final class QuickSearchManager: ObservableObject {
         let quickSearchView = QuickSearchView(monitor: monitor, manager: self)
         let hostingController = NSHostingController(rootView: quickSearchView)
         let panel = QuickSearchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
