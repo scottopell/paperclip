@@ -19,17 +19,13 @@ struct ClipboardDetailView: View {
                 // Header
                 HStack {
                     if monitor.currentItemID == item.id {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
-                        Text("Current")
-                            .font(.caption)
-                            .foregroundColor(.green)
+                        CurrentClipboardBadge()
                     }
 
-                    Text(Utilities.formatDate(item.timestamp))
+                    Text(Utilities.formatRelativeDate(item.timestamp))
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .help(Utilities.formatDate(item.timestamp))
 
                     if let sourceApp = item.sourceApplication {
                         Spacer().frame(width: 8)

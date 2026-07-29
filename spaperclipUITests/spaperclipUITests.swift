@@ -109,8 +109,8 @@ final class spaperclipUITests: XCTestCase {
         let fuzzyQuery = "qo\(uniqueToken)"
         app.typeText(fuzzyQuery)
         XCTAssertEqual(field.value as? String, fuzzyQuery)
-        XCTAssertTrue(app.staticTexts[newerValue].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts[olderValue].exists)
+        XCTAssertTrue(quickSearchRow(containing: newerValue, in: app).waitForExistence(timeout: 2))
+        XCTAssertTrue(quickSearchRow(containing: olderValue, in: app).exists)
 
         // Newest is selected first; Down selects the older matching result.
         field.typeKey(.downArrow, modifierFlags: [])
@@ -126,7 +126,7 @@ final class spaperclipUITests: XCTestCase {
         let quickHistory = app.descendants(matching: .any)["quick-search.history"]
         XCTAssertTrue(quickHistory.waitForExistence(timeout: 2))
         XCTAssertTrue(
-            quickHistory.staticTexts[olderValue].waitForExistence(timeout: 2),
+            quickSearchRow(containing: olderValue, in: app).waitForExistence(timeout: 2),
             "Expected the restored item in the reopened Quick Search history"
         )
         NSPasteboard.general.clearContents()
@@ -258,6 +258,17 @@ final class spaperclipUITests: XCTestCase {
             app.staticTexts[text].waitForExistence(timeout: 5),
             "Expected clipboard monitor to capture \(text)"
         )
+    }
+
+    @MainActor
+    private func quickSearchRow(
+        containing text: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "quick-search.history.item")
+            .matching(NSPredicate(format: "label CONTAINS %@", text))
+            .firstMatch
     }
 
     @MainActor

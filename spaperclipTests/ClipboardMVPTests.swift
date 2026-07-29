@@ -39,6 +39,69 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    func testRelativeDateFormattingUsesScannableRecency() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-20), relativeTo: now, calendar: calendar
+            ),
+            "Just now"
+        )
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-5 * 60), relativeTo: now, calendar: calendar
+            ),
+            "5 min ago"
+        )
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-2 * 3_600), relativeTo: now, calendar: calendar
+            ),
+            "2 hrs ago"
+        )
+    }
+
+    func testExactTimestampRemainsAvailable() {
+        let date = Date(timeIntervalSince1970: 0)
+        XCTAssertFalse(Utilities.formatDate(date).isEmpty)
+    }
+
+    func testQuickSearchAccessibilityLabelCombinesStateAndContent() {
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let item = ClipboardHistoryItem(
+            timestamp: timestamp,
+            contents: [
+                ClipboardContent(
+                    data: Data("pull request".utf8),
+                    formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+                    description: "pull request"
+                )
+            ],
+            sourceApplication: SourceApplicationInfo(
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari"
+            )
+        )
+
+        let label = QuickSearchResultAccessibility.label(
+            preview: "pull request",
+            item: item,
+            isSelected: true,
+            isCurrent: true,
+            now: timestamp.addingTimeInterval(5 * 60)
+        )
+
+        XCTAssertTrue(label.contains("Selected"))
+        XCTAssertTrue(label.contains("Current clipboard item"))
+        XCTAssertTrue(label.contains("5 min ago"))
+        XCTAssertTrue(label.contains("from Safari"))
+        XCTAssertTrue(label.contains("Text"))
+        XCTAssertTrue(label.contains("pull request"))
+    }
+
     func testQuickSearchFuzzyRankingPrefersExactThenContiguousThenGapped() {
         let fuzzy = textItem("Quick Search Result")
         let contiguous = textItem("prefix qsr suffix")

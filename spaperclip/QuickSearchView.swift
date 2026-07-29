@@ -132,6 +132,37 @@ private extension Character {
     }
 }
 
+enum QuickSearchResultAccessibility {
+    static func label(
+        preview: String,
+        item: ClipboardHistoryItem,
+        isSelected: Bool,
+        isCurrent: Bool,
+        now: Date = Date()
+    ) -> String {
+        var parts: [String] = []
+        if isSelected { parts.append("Selected") }
+        if isCurrent { parts.append("Current clipboard item") }
+        parts.append(Utilities.formatRelativeDate(item.timestamp, relativeTo: now))
+        if let appName = item.sourceApplication?.applicationName, !appName.isEmpty {
+            parts.append("from \(appName)")
+        }
+        if item.hasImageRepresentation {
+            parts.append("Image")
+        } else if item.contents.contains(where: { content in
+            content.formats.contains(where: { $0.uti.localizedCaseInsensitiveContains("url") })
+        }) {
+            parts.append("Link")
+        } else if item.contents.contains(where: { $0.canRenderAsText }) {
+            parts.append("Text")
+        } else {
+            parts.append("Data")
+        }
+        parts.append(preview)
+        return parts.joined(separator: ", ")
+    }
+}
+
 private struct QuickSearchResultRow: View {
     let item: ClipboardHistoryItem
     let isSelected: Bool
@@ -142,10 +173,11 @@ private struct QuickSearchResultRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
-                Text(Utilities.formatDate(item.timestamp))
-                    .font(.system(.caption, design: .monospaced))
+                Text(Utilities.formatRelativeDate(item.timestamp))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help(Utilities.formatDate(item.timestamp))
 
                 if let appName = item.sourceApplication?.applicationName, !appName.isEmpty {
                     Text("• \(appName)")
@@ -157,10 +189,7 @@ private struct QuickSearchResultRow: View {
                 Spacer(minLength: 4)
 
                 if isCurrent {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 8, height: 8)
-                        .help("Current clipboard item")
+                    CurrentClipboardBadge()
                 }
             }
 
@@ -196,6 +225,16 @@ private struct QuickSearchResultRow: View {
                 )
         )
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            QuickSearchResultAccessibility.label(
+                preview: preview,
+                item: item,
+                isSelected: isSelected,
+                isCurrent: isCurrent
+            )
+        )
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onTapGesture(perform: onSelect)
         .task(id: item.id) {
             preview = await Task.detached(priority: .userInitiated) {
@@ -344,6 +383,22 @@ struct QuickSearchView: View {
                     .padding(.bottom, 12)
                     .accessibilityIdentifier("quick-search.restore-error")
             }
+
+            HStack(spacing: 18) {
+                Label("Paste", systemImage: "return")
+                Text("⇧↩ Paste Plain Text")
+                Text("↑↓ Navigate")
+                Text("esc Close")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Return pastes, Shift Return pastes plain text, arrow keys navigate, Escape closes"
+            )
         }
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)

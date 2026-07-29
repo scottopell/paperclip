@@ -13,6 +13,16 @@ enum ClipboardHistoryPreview {
     }
 }
 
+struct CurrentClipboardBadge: View {
+    var body: some View {
+        Label("Current", systemImage: "checkmark.circle.fill")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.green)
+            .help("Current clipboard content")
+            .accessibilityLabel("Current clipboard item")
+    }
+}
+
 struct HistoryItemRow: View {
     let item: ClipboardHistoryItem
     @ObservedObject var monitor: ClipboardMonitor
@@ -77,9 +87,10 @@ struct HistoryItemRow: View {
 
     private var headerRow: some View {
         HStack(spacing: 4) {
-            Text(Utilities.formatDate(item.timestamp))
-                .font(.system(.caption, design: .monospaced))
+            Text(Utilities.formatRelativeDate(item.timestamp))
+                .font(.caption)
                 .foregroundColor(.secondary)
+                .help(Utilities.formatDate(item.timestamp))
 
             if let sourceApp = item.sourceApplication?.applicationName, !sourceApp.isEmpty {
                 Text("•")
@@ -118,10 +129,10 @@ struct HistoryItemRow: View {
     private var cardBorder: some View {
         RoundedRectangle(cornerRadius: 6)
             .stroke(
-                monitor.currentItemID == item.id
-                    ? Color.green.opacity(0.5)
-                    : (monitor.selectedHistoryItem?.id == item.id
-                        ? Color.accentColor.opacity(0.8) : Color.gray.opacity(0.3)),
+                monitor.selectedHistoryItem?.id == item.id
+                    ? Color.accentColor.opacity(0.8)
+                    : (monitor.currentItemID == item.id
+                        ? Color.green.opacity(0.5) : Color.gray.opacity(0.3)),
                 lineWidth: monitor.selectedHistoryItem?.id == item.id ? 2 : 1
             )
     }
@@ -129,10 +140,7 @@ struct HistoryItemRow: View {
     var typeIndicators: some View {
         HStack(spacing: 4) {
             if monitor.currentItemID == item.id {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 8, height: 8)
-                    .help("Current clipboard content")
+                CurrentClipboardBadge()
             }
 
             if item.contents.contains(where: { $0.canRenderAsText }) {
