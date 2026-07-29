@@ -11,6 +11,7 @@
         <relationship name="content" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDClipboardContent" inverseName="formats" inverseEntity="CDClipboardContent"/>
     </entity>
     <entity name="CDClipboardHistoryItem" representedClassName="CDClipboardHistoryItem" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="contents" toMany="YES" deletionRule="Cascade" destinationEntity="CDClipboardContent" inverseName="historyItem" inverseEntity="CDClipboardContent"/>
         <relationship name="sourceApplication" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDSourceApplicationInfo" inverseName="historyItems" inverseEntity="CDSourceApplicationInfo"/>

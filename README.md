@@ -1,6 +1,6 @@
-# sPaperclip
+# Paperclip
 
-sPaperclip is a small macOS clipboard-history app. While it is running, it records up to 100 recent clipboard items, persists them locally, and lets you search and restore them.
+Paperclip is a small macOS clipboard-history app. While it is running, it records up to 100 recent clipboard items, persists them locally, and lets you search and restore them.
 
 ## MVP features
 
@@ -17,7 +17,7 @@ sPaperclip is a small macOS clipboard-history app. While it is running, it recor
 - macOS 15.0 or later
 - Xcode 16 or later to build from source
 
-sPaperclip must be running to monitor the clipboard or respond to its global shortcut. Launch at login is not part of the current MVP.
+Paperclip must be running to monitor the clipboard or respond to its global shortcut. Launch at login is not part of the current MVP.
 
 ## Build from source
 
@@ -95,7 +95,7 @@ xcodebuild \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY=- \
   AD_HOC_CODE_SIGNING_ALLOWED=YES \
-  -only-testing:spaperclipUITests/spaperclipUITests/testLaunchShowsEmptyClipboardHistory \
+  -only-testing:spaperclipUITests/spaperclipUITests/testQuietLaunchAndOpenClipboardHistory \
   -only-testing:spaperclipUITests/spaperclipUITests/testCaptureSearchAndRestoreText \
   -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchKeyboardJourney \
   -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchPlainTextRestore \
@@ -108,15 +108,16 @@ XCUITest reliably covers the same Quick Search panel through its menu command, i
 
 ## Quick Search
 
-1. Keep sPaperclip running.
+1. Keep Paperclip running.
 2. Press **Control+Option+Space** from any application (the default).
-3. Type to filter clipboard history.
+3. Type an exact phrase or fuzzy abbreviation to rank matching clipboard history.
 4. Use the arrow keys to select a result.
-5. Press **Enter** to copy every captured representation, or **Shift+Enter** for plain text only.
+5. Press **Enter** to restore every captured representation and paste it into the app you were using, or **Shift+Enter** to paste plain text only. The restored item also becomes the current, most-recent clipboard entry.
 6. Press **Escape** to dismiss without copying.
 
-Change or clear the shortcut under **sPaperclip → Settings…** (`Cmd+,`).
-Printable-key shortcuts follow their character when switching keyboard layouts (for example, `S` remains `S` between US and Dvorak). After upgrading from an older build, record the shortcut once more so sPaperClip can remember the intended character.
+Change or clear the shortcut under **Paperclip → Settings…** (`Cmd+,`). Automatic paste requires Accessibility access; if access is unavailable, Paperclip still updates the clipboard and explains why it could not paste.
+Closing Clipboard History hides its AppKit-owned window while Paperclip keeps monitoring. Use the menu-bar icon to open Clipboard History, Quick Search, Database Statistics, or quit the app.
+Printable-key shortcuts follow their character when switching keyboard layouts (for example, `S` remains `S` between US and Dvorak). After upgrading from an older build, record the shortcut once more so Paperclip can remember the intended character.
 
 ## Current limitations
 

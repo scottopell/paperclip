@@ -2,50 +2,89 @@ import AppKit
 import SwiftUI
 
 /// Manages the menubar item for the application
+@MainActor
 class MenuBarManager: ObservableObject {
     static let shared = MenuBarManager()
 
     private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
+    private weak var clipboardMonitor: ClipboardMonitor?
+    private var onOpenHistory: (() -> Void)?
 
     private init() {}
 
     /// Sets up the menu bar item with the statistics view
-    func setupMenuBar(clipboardMonitor: ClipboardMonitor) {
+    func setupMenuBar(
+        clipboardMonitor: ClipboardMonitor,
+        onOpenHistory: @escaping () -> Void
+    ) {
+        self.clipboardMonitor = clipboardMonitor
+        self.onOpenHistory = onOpenHistory
         guard statusItem == nil else { return }
         // Create the status item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
             button.image = NSImage(
-                systemSymbolName: "chart.bar.doc.horizontal",
-                accessibilityDescription: "sPaperclip Stats")
-            button.setAccessibilityIdentifier("stats.menu-bar")
-            button.action = #selector(togglePopover)
-            button.target = self
+                systemSymbolName: "paperclip",
+                accessibilityDescription: "Paperclip")
+            button.setAccessibilityIdentifier("paperclip.menu-bar")
         }
 
-        // Create the popover
-        popover = NSPopover()
-        popover?.contentSize = NSSize(width: 400, height: 500)
-        popover?.behavior = .transient
-        popover?.animates = true
+        let menu = NSMenu()
+        menu.addItem(
+            withTitle: "Open Clipboard History",
+            action: #selector(openHistoryFromMenu),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(
+            withTitle: "Quick Search",
+            action: #selector(openQuickSearchFromMenu),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettingsFromMenu),
+            keyEquivalent: ","
+        ).target = self
+        menu.addItem(
+            withTitle: "Database Statistics",
+            action: #selector(openStatisticsFromMenu),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Quit Paperclip",
+            action: #selector(quitFromMenu),
+            keyEquivalent: "q"
+        ).target = self
+        statusItem?.menu = menu
 
-        // Set the SwiftUI view as content
-        let contentView = CoreDataStatsView(onClearHistory: clipboardMonitor.clearHistory)
-        popover?.contentViewController = NSHostingController(rootView: contentView)
     }
 
-    /// Toggles the popover when clicking the menu bar item
-    @objc private func togglePopover(_ sender: NSStatusBarButton) {
-        guard let popover = popover else { return }
+    @objc private func openHistoryFromMenu() {
+        onOpenHistory?()
+    }
 
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            if let button = statusItem?.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            }
-        }
+    @objc private func openQuickSearchFromMenu() {
+        QuickSearchManager.shared.showQuickSearch()
+    }
+
+    @objc private func openSettingsFromMenu() {
+        NSApplication.shared.sendAction(
+            Selector(("showSettingsWindow:")),
+            to: nil,
+            from: nil
+        )
+        NSApplication.shared.activate()
+    }
+
+    @objc private func openStatisticsFromMenu() {
+        guard let clipboardMonitor else { return }
+        StatsWindowController.shared.showStatsWindow(clipboardMonitor: clipboardMonitor)
+    }
+
+    @objc private func quitFromMenu() {
+        NSApplication.shared.terminate(nil)
     }
 }

@@ -39,6 +39,184 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    func testRelativeDateFormattingUsesScannableRecency() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-20), relativeTo: now, calendar: calendar
+            ),
+            "Just now"
+        )
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-5 * 60), relativeTo: now, calendar: calendar
+            ),
+            "5 min ago"
+        )
+        XCTAssertEqual(
+            Utilities.formatRelativeDate(
+                now.addingTimeInterval(-2 * 3_600), relativeTo: now, calendar: calendar
+            ),
+            "2 hrs ago"
+        )
+    }
+
+    func testExactTimestampRemainsAvailable() {
+        let date = Date(timeIntervalSince1970: 0)
+        XCTAssertFalse(Utilities.formatDate(date).isEmpty)
+    }
+
+    func testQuickSearchAccessibilityLabelCombinesStateAndContent() {
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let item = ClipboardHistoryItem(
+            timestamp: timestamp,
+            contents: [
+                ClipboardContent(
+                    data: Data("pull request".utf8),
+                    formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+                    description: "pull request"
+                )
+            ],
+            sourceApplication: SourceApplicationInfo(
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari"
+            )
+        )
+
+        let label = QuickSearchResultAccessibility.label(
+            preview: "pull request",
+            item: item,
+            isSelected: true,
+            isCurrent: true,
+            now: timestamp.addingTimeInterval(5 * 60)
+        )
+
+        XCTAssertTrue(label.contains("Selected"))
+        XCTAssertTrue(label.contains("Current clipboard item"))
+        XCTAssertTrue(label.contains("5 min ago"))
+        XCTAssertTrue(label.contains("from Safari"))
+        XCTAssertTrue(label.contains("Text"))
+        XCTAssertTrue(label.contains("pull request"))
+    }
+
+    func testQuickSearchFuzzyRankingPrefersExactThenContiguousThenGapped() {
+        let fuzzy = textItem("Quick Search Result")
+        let contiguous = textItem("prefix qsr suffix")
+        let exact = textItem("QSR")
+        let unrelated = textItem("clipboard history")
+
+        let matches = QuickSearchQuery.results(
+            in: [fuzzy, unrelated, contiguous, exact],
+            matching: "qsr"
+        )
+
+        XCTAssertEqual(matches.map(\.id), [exact.id, contiguous.id, fuzzy.id])
+    }
+
+    func testQuickSearchFuzzyMatchingIsCaseAndDiacriticInsensitive() {
+        let cafe = textItem("CAFÉ receipt")
+
+        XCTAssertEqual(
+            QuickSearchQuery.results(in: [cafe], matching: "cafe").map(\.id),
+            [cafe.id]
+        )
+    }
+
+    func testQuickSearchFuzzyRankingPrefersWordStarts() {
+        let midWord = textItem("acmeb record")
+        let wordStarts = textItem("alpha beta record")
+
+        XCTAssertEqual(
+            QuickSearchQuery.results(
+                in: [midWord, wordStarts], matching: "abr"
+            ).map(\.id),
+            [wordStarts.id, midWord.id]
+        )
+    }
+
+    func testQuickSearchEqualRanksKeepRecencyOrder() {
+        let newer = textItem("quick search row")
+        let older = textItem("quick search row")
+
+        XCTAssertEqual(
+            QuickSearchQuery.results(in: [newer, older], matching: "qsr").map(\.id),
+            [newer.id, older.id]
+        )
+    }
+
+    func testQuickSearchInitialSelectionUsesCurrentItemID() {
+        let first = textItem("first")
+        let current = textItem("current")
+        let results = [first, current]
+
+        XCTAssertEqual(
+            QuickSearchQuery.initialSelection(
+                from: results, currentItemID: current.id, query: "")?.id,
+            current.id
+        )
+        XCTAssertEqual(
+            QuickSearchQuery.initialSelection(
+                from: results, currentItemID: current.id, query: "cur")?.id,
+            first.id
+        )
+        XCTAssertEqual(
+            QuickSearchQuery.initialSelection(
+                from: results, currentItemID: nil, query: "")?.id,
+            first.id
+        )
+        XCTAssertEqual(
+            QuickSearchQuery.initialSelection(
+                from: results, currentItemID: UUID(), query: "")?.id,
+            first.id
+        )
+    }
+
+    func testPromotingHistoryItemPreservesIdentityAndMovesItFirst() {
+        let first = textItem("first")
+        let selected = textItem("selected")
+        let promotionDate = Date(timeIntervalSince1970: 1234)
+
+        let result = ClipboardHistoryState.promoting(
+            selected, in: [first, selected], at: promotionDate)
+
+        XCTAssertEqual(result.item.id, selected.id)
+        XCTAssertEqual(result.item.timestamp, promotionDate)
+        XCTAssertEqual(result.history.map(\.id), [selected.id, first.id])
+        XCTAssertEqual(result.history.count, 2)
+    }
+
+    func testRichHistoryItemContainsItsPlainTextRestore() {
+        let textData = Data("restored text".utf8)
+        let richItem = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: [
+                ClipboardContent(
+                    data: textData,
+                    formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+                    description: "restored text"
+                ),
+                ClipboardContent(
+                    data: Data("{\\rtf1 restored text}".utf8),
+                    formats: [ClipboardFormat(uti: "public.rtf")],
+                    description: "rich text"
+                ),
+            ],
+            sourceApplication: nil
+        )
+        let plainTextCapture = [
+            ClipboardContent(
+                data: textData,
+                formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+                description: "restored text"
+            )
+        ]
+
+        XCTAssertTrue(richItem.containsRepresentations(from: plainTextCapture))
+    }
+
     @MainActor
     func testLayoutAwareShortcutFindsPrintableCharacterKeyCode() {
         guard let keyCode = LayoutAwareShortcutManager.keyCode(for: "s") else {
@@ -109,6 +287,28 @@ final class ClipboardMVPTests: XCTestCase {
             sourceApplication: nil
         )
 
+        XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
         XCTAssertFalse(Utilities.copyAllContentTypes(from: item, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+    }
+
+    func testPlainTextRestoreRejectsImageWithoutClearingPasteboard() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
+        let imageItem = ClipboardHistoryItem(
+            timestamp: Date(),
+            contents: [
+                ClipboardContent(
+                    data: Data([0x89, 0x50, 0x4E, 0x47]),
+                    formats: [ClipboardFormat(uti: "public.png")],
+                    description: "PNG image"
+                )
+            ],
+            sourceApplication: nil
+        )
+
+        XCTAssertFalse(Utilities.copyPlainText(from: imageItem, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
     }
 }

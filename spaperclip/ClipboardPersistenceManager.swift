@@ -25,6 +25,7 @@ class ClipboardPersistenceManager {
 
             // Set basic attributes
             historyItemEntity.timestamp = item.timestamp
+            historyItemEntity.id = item.id
 
             // Create source application entity if available
             if let sourceApp = item.sourceApplication {
@@ -130,7 +131,10 @@ class ClipboardPersistenceManager {
             sourceApp = convertToSourceApplicationInfo(from: sourceAppEntity)
         }
 
+        let id = entity.id ?? UUID()
+        if entity.id == nil { entity.id = id }
         return ClipboardHistoryItem(
+            id: id,
             timestamp: entity.timestamp ?? Date(),
             contents: contents,
             sourceApplication: sourceApp
@@ -171,6 +175,28 @@ class ClipboardPersistenceManager {
             bundleIdentifier: entity.bundleIdentifier,
             applicationName: entity.applicationName
         )
+    }
+
+    /// Updates the persisted recency of an existing history item without inserting a duplicate.
+    func promoteHistoryItem(_ item: ClipboardHistoryItem, to timestamp: Date) {
+        coreDataManager.performBackgroundTask { context in
+            let request = NSFetchRequest<CDClipboardHistoryItem>(
+                entityName: "CDClipboardHistoryItem")
+            request.predicate = NSPredicate(format: "id == %@", item.id as CVarArg)
+            request.fetchLimit = 1
+
+            do {
+                guard let entity = try context.fetch(request).first else {
+                    self.logger.warning("Could not find persisted history item to promote")
+                    return
+                }
+                entity.timestamp = timestamp
+                self.logger.info("Promoted persisted clipboard history item")
+            } catch {
+                self.logger.error(
+                    "Failed to promote clipboard history item: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Management Operations

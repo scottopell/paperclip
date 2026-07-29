@@ -4,12 +4,54 @@ import SwiftUI
 
 /// Contains common utility functions used throughout the application
 enum Utilities {
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, h:mm a"
+        return formatter
+    }()
+    private static let recentDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, h:mm a"
+        return formatter
+    }()
 
     /// Formats a date with a standard timestamp format
     static func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
+        timestampFormatter.string(from: date)
+    }
+
+    static func formatRelativeDate(
+        _ date: Date,
+        relativeTo now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        let elapsed = max(0, now.timeIntervalSince(date))
+        if elapsed < 60 { return "Just now" }
+        if elapsed < 3_600 { return "\(Int(elapsed / 60)) min ago" }
+        if calendar.isDate(date, inSameDayAs: now) {
+            let hours = Int(elapsed / 3_600)
+            return "\(hours) hr\(hours == 1 ? "" : "s") ago"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday, \(timeFormatter.string(from: date))"
+        }
+        if let sixDaysAgo = calendar.date(byAdding: .day, value: -6, to: now),
+            date >= sixDaysAgo
+        {
+            return weekdayFormatter.string(from: date)
+        }
+        return recentDateFormatter.string(from: date)
     }
 
     /// Formats a size in bytes or characters with appropriate units (K, M)
@@ -37,6 +79,7 @@ enum Utilities {
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
+        guard item.contents.contains(where: { !$0.formats.isEmpty }) else { return false }
         pasteboard.clearContents()
 
         var copiedAnyContent = false
@@ -52,10 +95,21 @@ enum Utilities {
     }
 
     @discardableResult
+    static func copyPlainText(
+        from item: ClipboardHistoryItem,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard let text = item.textRepresentation else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    @discardableResult
     static func copyToClipboard(
         _ content: ClipboardContent,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
+        guard !content.formats.isEmpty else { return false }
         pasteboard.clearContents()
 
         var copiedAnyContent = false

@@ -24,30 +24,30 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchShowsEmptyClipboardHistory() throws {
+    func testQuietLaunchAndOpenClipboardHistory() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
         app.launch()
-        app.activate()
 
-        XCTAssertTrue(
-            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10),
-            "Expected the clipboard history surface to appear after launch"
+        let history = app.descendants(matching: .any)["clipboard.history"]
+        XCTAssertFalse(
+            history.waitForExistence(timeout: 2),
+            "Expected Paperclip to launch quietly without opening Clipboard History"
         )
+        let statusItem = app.statusItems["paperclip.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+        app.menuItems["Open Clipboard History"].click()
         XCTAssertTrue(
-            app.staticTexts["clipboard.empty-state"].waitForExistence(timeout: 5),
-            "Expected a fresh UI-test store to start with empty history"
+            history.waitForExistence(timeout: 5),
+            "Expected the status-menu action to open Clipboard History"
         )
     }
 
     @MainActor
     func testCaptureSearchAndRestoreText() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
-        app.launch()
-        app.activate()
+        let app = launchIsolatedApp()
 
         let history = app.descendants(matching: .any)["clipboard.history"]
         XCTAssertTrue(history.waitForExistence(timeout: 10))
@@ -83,7 +83,8 @@ final class spaperclipUITests: XCTestCase {
         let mainHistory = app.descendants(matching: .any)["clipboard.history"]
         XCTAssertTrue(mainHistory.waitForExistence(timeout: 10))
 
-        let sharedPrefix = "Quick option \(UUID().uuidString.prefix(8))"
+        let uniqueToken = String(UUID().uuidString.prefix(8))
+        let sharedPrefix = "Quick option \(uniqueToken)"
         let olderValue = "\(sharedPrefix) older"
         let newerValue = "\(sharedPrefix) newer"
         capture(olderValue, in: app)
@@ -105,22 +106,40 @@ final class spaperclipUITests: XCTestCase {
         )
         XCTAssertEqual(app.buttons.matching(identifier: "_XCUI:ZoomWindow").count, zoomButtonCount)
 
-        app.typeText(sharedPrefix)
-        XCTAssertEqual(field.value as? String, sharedPrefix)
-        XCTAssertTrue(app.staticTexts[newerValue].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts[olderValue].exists)
+        let fuzzyQuery = "qo\(uniqueToken)"
+        app.typeText(fuzzyQuery)
+        XCTAssertEqual(field.value as? String, fuzzyQuery)
+        XCTAssertTrue(quickSearchRow(containing: newerValue, in: app).waitForExistence(timeout: 2))
+        XCTAssertTrue(quickSearchRow(containing: olderValue, in: app).exists)
 
         // Newest is selected first; Down selects the older matching result.
         field.typeKey(.downArrow, modifierFlags: [])
         NSPasteboard.general.clearContents()
         field.typeKey(.return, modifierFlags: [])
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), olderValue)
-        XCTAssertFalse(field.waitForExistence(timeout: 1))
+        dismissPermissionFallbackIfNeeded(field: field, in: app)
 
-        // Every invocation is a fresh session with an empty, focused query.
+        // Every invocation is a fresh session with an empty query and the restored item first.
         openQuickSearch(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         XCTAssertEqual(field.value as? String, "")
+        let quickHistory = app.descendants(matching: .any)["quick-search.history"]
+        XCTAssertTrue(quickHistory.waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            quickSearchRow(containing: olderValue, in: app).waitForExistence(timeout: 2),
+            "Expected the restored item in the reopened Quick Search history"
+        )
+        NSPasteboard.general.clearContents()
+        field.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string),
+            olderValue,
+            "Reopening and pressing Enter should restore the promoted current item"
+        )
+        dismissPermissionFallbackIfNeeded(field: field, in: app)
+
+        openQuickSearch(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
         let pasteboardBeforeEscape = NSPasteboard.general.string(forType: .string)
         app.typeText("does not mutate clipboard")
         field.typeKey(.escape, modifierFlags: [])
@@ -143,9 +162,10 @@ final class spaperclipUITests: XCTestCase {
             app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10)
         )
 
-        let statusItem = app.statusItems["stats.menu-bar"]
+        let statusItem = app.statusItems["paperclip.menu-bar"]
         XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
         statusItem.click()
+        app.menuItems["Database Statistics"].click()
 
         let stats = app.descendants(matching: .any)["stats.root"]
         XCTAssertTrue(stats.waitForExistence(timeout: 5))
@@ -160,9 +180,6 @@ final class spaperclipUITests: XCTestCase {
 
         XCTAssertTrue(stats.exists)
 
-        statusItem.click()
-        app.menuBars.menuBarItems["Clipboard"].click()
-        app.menuBars.menuItems["Database Statistics"].click()
         XCTAssertTrue(app.windows["Database Statistics"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Core Data Statistics"].exists)
     }
@@ -203,7 +220,18 @@ final class spaperclipUITests: XCTestCase {
         NSPasteboard.general.clearContents()
         field.typeKey(.return, modifierFlags: [.shift])
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), value)
-        XCTAssertFalse(field.waitForExistence(timeout: 1))
+        dismissPermissionFallbackIfNeeded(field: field, in: app)
+    }
+
+    @MainActor
+    private func dismissPermissionFallbackIfNeeded(
+        field: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        if field.waitForExistence(timeout: 1) {
+            field.typeKey(.escape, modifierFlags: [])
+            XCTAssertFalse(field.waitForExistence(timeout: 1))
+        }
     }
 
     @MainActor
@@ -212,7 +240,13 @@ final class spaperclipUITests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["SPAPERCLIP_UI_TEST_ID"] = UUID().uuidString
         app.launch()
-        app.activate()
+        let statusItem = app.statusItems["paperclip.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+        app.menuItems["Open Clipboard History"].click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 5)
+        )
         return app
     }
 
@@ -227,9 +261,22 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
+    private func quickSearchRow(
+        containing text: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "quick-search.history.item")
+            .matching(NSPredicate(format: "label CONTAINS %@", text))
+            .firstMatch
+    }
+
+    @MainActor
     private func openQuickSearch(in app: XCUIApplication) {
-        app.menuBars.menuBarItems["Clipboard"].click()
-        app.menuBars.menuItems["Quick Search"].click()
+        let statusItem = app.statusItems["paperclip.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+        app.menuItems["Quick Search"].click()
     }
 
     @MainActor
