@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Contains common utility functions used throughout the application
 enum Utilities {
+    private static let intentionalCIFailure: MissingCIValidationType? = nil
     private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
