@@ -88,6 +88,62 @@ struct ClipboardFormat: Identifiable, Hashable {
     }
 }
 
+/// Lazily retains decoded searchable text while bounding aggregate memory use.
+/// Eviction only affects performance; search results remain deterministic.
+final class ClipboardSearchTextCache {
+    // The history cap is 100 items. This admits the measured 100 × 1 MiB workload
+    // while remaining explicitly bounded and evictable under larger real-world values.
+    static let shared = ClipboardSearchTextCache(totalCostLimit: 128 * 1_024 * 1_024)
+
+    private let cache = NSCache<NSUUID, NSString>()
+    private let matchCache = NSCache<NSString, NSNumber>()
+    private let lock = NSLock()
+    private var decodeCounts: [UUID: Int] = [:]
+
+    init(totalCostLimit: Int) {
+        cache.totalCostLimit = totalCostLimit
+        matchCache.countLimit = 10_000
+    }
+
+    func text(for content: ClipboardContent, decode: () -> String?) -> String? {
+        let key = content.id as NSUUID
+        if let cached = cache.object(forKey: key) { return cached as String }
+
+        guard let text = decode() else { return nil }
+        let value = text as NSString
+        cache.setObject(value, forKey: key, cost: text.utf8.count)
+        lock.lock()
+        decodeCounts[content.id, default: 0] += 1
+        lock.unlock()
+        return text
+    }
+
+    func matches(_ query: String, in content: ClipboardContent) -> Bool {
+        let key = "\(content.id.uuidString)\u{1F}\(query)" as NSString
+        if let cached = matchCache.object(forKey: key) { return cached.boolValue }
+
+        let result = text(for: content) {
+            content.decodeSearchableText()
+        }?.localizedCaseInsensitiveContains(query) == true
+        matchCache.setObject(NSNumber(value: result), forKey: key)
+        return result
+    }
+
+    func decodeCount(for content: ClipboardContent) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return decodeCounts[content.id, default: 0]
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+        matchCache.removeAllObjects()
+        lock.lock()
+        decodeCounts.removeAll()
+        lock.unlock()
+    }
+}
+
 /// Represents a single piece of data from the clipboard with its available formats
 /// Implements efficient handling of potentially large data objects
 struct ClipboardContent: Identifiable, Hashable {
@@ -323,6 +379,51 @@ struct ClipboardContent: Identifiable, Hashable {
         return nil
     }
 
+    /// Returns complete text for filtering. Plain text and URLs are decoded in full.
+    /// Rich text and HTML retain a 500 KB safety bound because AppKit parsing can be
+    /// substantially more expensive than decoding plain text.
+    func searchableText(cache: ClipboardSearchTextCache = .shared) -> String? {
+        cache.text(for: self) { decodeSearchableText() }
+    }
+
+    fileprivate func decodeSearchableText() -> String? {
+        let identifiers = Set(formats.map(\.uti))
+        let isPlainText = identifiers.contains(UTType.plainText.identifier)
+            || identifiers.contains("public.utf8-plain-text")
+        if isPlainText {
+            // A UTF-16 byte stream containing only ASCII code points can also be
+            // technically valid UTF-8 full of NULs. Honor its BOM before probing UTF-8.
+            let hasUTF16BOM = data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF])
+            if hasUTF16BOM, let text = String(data: data, encoding: .utf16) { return text }
+            if let text = String(data: data, encoding: .utf8) { return text }
+            if let text = String(data: data, encoding: .utf16) { return text }
+            return String(data: data, encoding: .ascii)
+        }
+
+        let isURL = identifiers.contains(UTType.url.identifier)
+            || identifiers.contains("public.url")
+            || identifiers.contains(UTType.fileURL.identifier)
+            || identifiers.contains("public.file-url")
+        if isURL { return String(data: data, encoding: .utf8) }
+
+        guard data.count < 500_000 else { return nil }
+        if identifiers.contains(UTType.rtf.identifier) || identifiers.contains("public.rtf") {
+            return try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil
+            ).string
+        }
+        if identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html") {
+            return try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.html],
+                documentAttributes: nil
+            ).string
+        }
+        return nil
+    }
+
     /// Gets the entire text representation if possible (backward compatibility)
     func getTextRepresentation() -> String? {
         // For small texts, just load directly
@@ -424,6 +525,15 @@ struct ClipboardHistoryItem: Identifiable, Equatable, Hashable {
             }
         }
         return nil
+    }
+
+    func matchesSearchText(
+        _ query: String,
+        cache: ClipboardSearchTextCache = .shared
+    ) -> Bool {
+        contents.contains { content in
+            cache.matches(query, in: content)
+        }
     }
 
     var hasImageRepresentation: Bool {
@@ -599,13 +709,11 @@ class ClipboardMonitor: ObservableObject {
                 if !loadedItems.isEmpty {
                     self.history = loadedItems
 
-                    // Set the first history item as the current item on startup
-                    if let firstItem = self.history.first {
-                        self.currentItem = firstItem
-                        self.currentItemID = firstItem.id
-                        self.selectedHistoryItem = firstItem
-                        self.logger.info("Selected first history item as current item")
-                    }
+                    // Persistence cannot prove what is currently on the system pasteboard.
+                    // Select the newest entry for browsing, but leave the Current marker unset.
+                    self.selectedHistoryItem = self.history.first
+                    self.currentItem = nil
+                    self.currentItemID = nil
 
                     self.logger.info("Loaded \(loadedItems.count) history items from persistence")
                 } else {
@@ -635,14 +743,22 @@ class ClipboardMonitor: ObservableObject {
         logger.info("Clipboard monitoring stopped")
     }
 
-    func clearHistory() {
+    func clearHistory(completion: (() -> Void)? = nil) {
+        guard !history.isEmpty else {
+            completion?()
+            return
+        }
+
         history.removeAll()
         currentItem = nil
         currentItemID = nil
         selectedHistoryItem = nil
+        ClipboardSearchTextCache.shared.removeAll()
 
-        persistenceManager.clearAllHistory()
-        logger.info("Clipboard history cleared and persistence data removed")
+        persistenceManager.clearAllHistory { [weak self] in
+            self?.logger.info("Clipboard history cleared and persistence data removed")
+            completion?()
+        }
     }
 
     // MARK: - Selection Management
@@ -819,10 +935,8 @@ class ClipboardMonitor: ObservableObject {
             } else {
                 // Insert at beginning (most recent first)
                 self.history.insert(newItem, at: 0)
-                self.selectedHistoryItem = newItem
+                self.markCurrent(newItem)
                 self.persistenceManager.saveHistoryItem(newItem)
-                self.currentItem = newItem
-                self.currentItemID = newItem.id
             }
 
             // Limit history size to control memory usage
@@ -842,9 +956,34 @@ class ClipboardMonitor: ObservableObject {
             "UI updated with clipboard content: \(contents.count) content groups")
     }
 
+    private func markCurrent(_ item: ClipboardHistoryItem) {
+        currentItem = item
+        currentItemID = item.id
+        selectedHistoryItem = item
+    }
+
+    /// Copies exactly one format without recording the app's own write.
+    @discardableResult
+    func copyFormat(
+        _ format: ClipboardFormat,
+        from content: ClipboardContent,
+        in item: ClipboardHistoryItem
+    ) -> Bool {
+        let pasteboard = NSPasteboard.general
+        guard Utilities.copy(format, from: content, to: pasteboard) else {
+            logger.warning("Cannot copy format: no representation was written")
+            return false
+        }
+
+        lastChangeCount = pasteboard.changeCount
+        promoteToCurrent(item)
+        logger.info("Copied one format from history item")
+        return true
+    }
+
     /// Copies one content group without recording the app's own write.
     @discardableResult
-    func copyContent(_ content: ClipboardContent) -> Bool {
+    func copyContent(_ content: ClipboardContent, in item: ClipboardHistoryItem) -> Bool {
         let pasteboard = NSPasteboard.general
         guard Utilities.copyToClipboard(content, to: pasteboard) else {
             logger.warning("Cannot copy content: no representation was written")
@@ -852,6 +991,7 @@ class ClipboardMonitor: ObservableObject {
         }
 
         lastChangeCount = pasteboard.changeCount
+        promoteToCurrent(item)
         logger.info("Copied content from history item")
         return true
     }

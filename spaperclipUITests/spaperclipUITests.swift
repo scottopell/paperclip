@@ -180,6 +180,57 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
+    func testDetailCopyShowsFeedbackAndMarksRestoredItemCurrent() throws {
+        let app = launchIsolatedApp()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10)
+        )
+
+        let olderValue = "Older polish \(UUID().uuidString)"
+        let newerValue = "Newer polish \(UUID().uuidString)"
+        capture(olderValue, in: app)
+        capture(newerValue, in: app)
+
+        let olderRowText = app.staticTexts[olderValue]
+        XCTAssertTrue(olderRowText.waitForExistence(timeout: 5))
+        olderRowText.click()
+
+        let copyButton = app.buttons["clipboard.copy-all"]
+        XCTAssertTrue(copyButton.waitForExistence(timeout: 5))
+        copyButton.click()
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), olderValue)
+        let copied = NSPredicate(format: "value == %@", "Copied")
+        expectation(for: copied, evaluatedWith: copyButton)
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "label CONTAINS %@", "current clipboard content")
+            ).firstMatch.waitForExistence(timeout: 2)
+        )
+    }
+
+    @MainActor
+    func testClearHistoryRequiresConfirmation() throws {
+        let app = launchIsolatedApp()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10)
+        )
+        let value = "Keep until confirmed \(UUID().uuidString)"
+        capture(value, in: app)
+
+        openClearHistory(in: app)
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 2))
+        app.sheets.buttons["Cancel"].click()
+        XCTAssertTrue(app.staticTexts[value].waitForExistence(timeout: 2))
+
+        openClearHistory(in: app)
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 2))
+        app.sheets.buttons["Clear History"].click()
+        XCTAssertTrue(app.staticTexts["clipboard.empty-state"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testDatabaseStatisticsRefreshesOnItsCoreDataQueue() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -301,6 +352,14 @@ final class spaperclipUITests: XCTestCase {
             .matching(identifier: "quick-search.history.item")
             .matching(NSPredicate(format: "label CONTAINS %@", text))
             .firstMatch
+    }
+
+    @MainActor
+    private func openClearHistory(in app: XCUIApplication) {
+        let statusItem = app.statusItems["paperclip.menu-bar"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.click()
+        app.menuItems["Clear History…"].click()
     }
 
     @MainActor

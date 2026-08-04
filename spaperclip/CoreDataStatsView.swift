@@ -1,10 +1,32 @@
 import CoreData
 import SwiftUI
 
-struct CoreDataStatsView: View {
-    let onClearHistory: () -> Void
+enum ClearHistoryConfirmation {
+    static let title = "Clear Clipboard History?"
+    static let message = "This permanently deletes all clipboard history. This action cannot be undone."
 
-    init(onClearHistory: @escaping () -> Void) {
+    static func present(for window: NSWindow? = NSApp.keyWindow, onConfirm: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Clear History")
+        alert.addButton(withTitle: "Cancel")
+
+        if let window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn { onConfirm() }
+            }
+        } else if alert.runModal() == .alertFirstButtonReturn {
+            onConfirm()
+        }
+    }
+}
+
+struct CoreDataStatsView: View {
+    let onClearHistory: (@escaping () -> Void) -> Void
+
+    init(onClearHistory: @escaping (@escaping () -> Void) -> Void) {
         self.onClearHistory = onClearHistory
     }
 
@@ -65,6 +87,8 @@ struct CoreDataStatsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(totalItems == 0 || isRefreshing)
+                .accessibilityIdentifier("stats.clear-history")
                 Spacer()
             }
             .padding(.top, 8)
@@ -116,24 +140,12 @@ struct CoreDataStatsView: View {
     }
 
     private func clearAllData() {
-        // Show confirmation dialog
-        let alert = NSAlert()
-        alert.messageText = "Clear All Clipboard Data"
-        alert.informativeText =
-            "Are you sure you want to delete all clipboard history? This action cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Clear All Data")
-
-        if let window = NSApplication.shared.windows.first {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertSecondButtonReturn {
-                    onClearHistory()
-                    // Refresh stats after clearing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        refreshStats()
-                    }
-                }
+        guard totalItems > 0 else { return }
+        ClearHistoryConfirmation.present {
+            isRefreshing = true
+            onClearHistory {
+                isRefreshing = false
+                refreshStats()
             }
         }
     }

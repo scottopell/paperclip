@@ -26,9 +26,27 @@ enum QuickSearchQuery {
 
         var ranked: [(item: ClipboardHistoryItem, rank: MatchRank, recency: Int)] = []
         for (index, item) in history.enumerated() {
-            guard let text = item.textRepresentation else { continue }
-            guard let matchRank = rank(text: text, query: normalizedQuery) else { continue }
-            ranked.append((item: item, rank: matchRank, recency: index))
+            let ranks = item.contents.compactMap { content -> MatchRank? in
+                // Preserve detailed fuzzy ranking for normal clipboard values. Building
+                // character arrays for a 1 MiB value on every keystroke would defeat the
+                // bounded full-text cache, so large values use a cached contiguous match
+                // and retain history recency when their ranks are otherwise equal.
+                if content.data.count >= 100_000 {
+                    guard ClipboardSearchTextCache.shared.matches(normalizedQuery, in: content)
+                    else { return nil }
+                    return MatchRank(
+                        matchKind: 2,
+                        wordStarts: 0,
+                        span: normalizedQuery.count,
+                        gaps: 0,
+                        start: 0
+                    )
+                }
+                guard let text = content.searchableText() else { return nil }
+                return rank(text: text, query: normalizedQuery)
+            }
+            guard let bestRank = ranks.max() else { continue }
+            ranked.append((item: item, rank: bestRank, recency: index))
         }
         ranked.sort { lhs, rhs in
             if lhs.rank == rhs.rank { return lhs.recency < rhs.recency }

@@ -34,6 +34,17 @@ struct HistoryItemRow: View {
             .contextMenu {
                 contextMenu
             }
+            .overlay(alignment: .topLeading) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(accessibilitySummary)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAddTraits(
+                        monitor.selectedHistoryItem?.id == item.id ? .isSelected : []
+                    )
+                    .allowsHitTesting(false)
+            }
             .task {
                 // Load text preview efficiently from first 100 characters
                 await loadPreviewText()
@@ -59,6 +70,17 @@ struct HistoryItemRow: View {
 
         // Images are previewed in the detail pane, but have no text for the history row.
         self.previewText = ClipboardHistoryPreview.fallbackText(for: item)
+    }
+
+    private var accessibilitySummary: String {
+        var parts = [previewText, Utilities.formatDate(item.timestamp)]
+        if let appName = item.sourceApplication?.applicationName, !appName.isEmpty {
+            parts.append("from \(appName)")
+        }
+        if monitor.currentItemID == item.id {
+            parts.append("current clipboard content")
+        }
+        return parts.joined(separator: ", ")
     }
 
     // MARK: - Component Parts
@@ -141,16 +163,19 @@ struct HistoryItemRow: View {
         HStack(spacing: 4) {
             if monitor.currentItemID == item.id {
                 CurrentClipboardBadge()
+                    .accessibilityLabel("Current clipboard content")
             }
 
             if item.contents.contains(where: { $0.canRenderAsText }) {
                 Image(systemName: "doc.text")
                     .foregroundColor(.blue)
+                    .accessibilityLabel("Text content")
             }
 
             if item.contents.contains(where: { $0.canRenderAsImage }) {
                 Image(systemName: "photo")
                     .foregroundColor(.green)
+                    .accessibilityLabel("Image content")
             }
 
             let hasURL = item.contents.contains(where: {
@@ -162,6 +187,7 @@ struct HistoryItemRow: View {
             if hasURL {
                 Image(systemName: "link")
                     .foregroundColor(.purple)
+                    .accessibilityLabel("URL content")
             }
         }
     }
@@ -178,15 +204,19 @@ struct HistoryItemRow: View {
             Section {
                 ForEach(item.contents) { content in
                     if content.formats.count == 1 {
-                        Button(content.formats[0].typeName) {
-                            monitor.copyContent(content)
+                        Button("Copy \(content.formats[0].typeName)") {
+                            monitor.copyFormat(content.formats[0], from: content, in: item)
                         }
                     } else {
                         Menu(getContentMenuLabel(content)) {
                             ForEach(content.formats) { format in
-                                Button(format.typeName) {
-                                    monitor.copyContent(content)
+                                Button("Copy \(format.typeName)") {
+                                    monitor.copyFormat(format, from: content, in: item)
                                 }
+                            }
+                            Divider()
+                            Button("Copy All Formats in Group") {
+                                monitor.copyContent(content, in: item)
                             }
                         }
                     }
@@ -217,7 +247,7 @@ enum ClipboardHistoryFilter {
     static func matching(_ history: [ClipboardHistoryItem], searchText: String) -> [ClipboardHistoryItem] {
         guard !searchText.isEmpty else { return history }
         return history.filter { item in
-            item.textRepresentation?.localizedCaseInsensitiveContains(searchText) == true
+            item.matchesSearchText(searchText)
         }
     }
 }

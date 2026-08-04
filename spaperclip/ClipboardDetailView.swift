@@ -12,6 +12,26 @@ struct ClipboardDetailView: View {
 
     // A clipboard item may contain distinct data representations, such as TIFF and PNG.
     @State private var selectedContent: ClipboardContent?
+    @State private var copyFeedback: CopyFeedback?
+
+    private enum CopyFeedback {
+        case copied
+        case failed
+
+        var label: String {
+            switch self {
+            case .copied: "Copied"
+            case .failed: "Copy failed"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .copied: "checkmark"
+            case .failed: "exclamationmark.triangle"
+            }
+        }
+    }
 
     var body: some View {
         if let item = monitor.selectedHistoryItem {
@@ -52,12 +72,21 @@ struct ClipboardDetailView: View {
                     Spacer()
 
                     Button(action: {
-                        monitor.copyAllContentTypes(item)
+                        copyFeedback = monitor.copyAllContentTypes(item) ? .copied : .failed
                     }) {
-                        Image(systemName: "doc.on.doc")
+                        HStack(spacing: 4) {
+                            Image(systemName: copyFeedback?.icon ?? "doc.on.doc")
+                            if let copyFeedback {
+                                Text(copyFeedback.label)
+                                    .font(.caption)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
-                    .help("Copy to Clipboard")
+                    .accessibilityLabel("Copy all content types")
+                    .accessibilityValue(copyFeedback?.label ?? "")
+                    .accessibilityIdentifier("clipboard.copy-all")
+                    .help("Copy all content types to the clipboard")
                 }
                 .padding([.horizontal, .top], 4)
 
@@ -108,6 +137,7 @@ struct ClipboardDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: monitor.selectedHistoryItem) { oldItem, newItem in
                 updateSelectionForItem(newItem)
+                copyFeedback = nil
             }
             .onAppear {
                 updateSelectionForItem(item)
