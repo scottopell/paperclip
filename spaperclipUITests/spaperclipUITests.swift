@@ -148,6 +148,38 @@ final class spaperclipUITests: XCTestCase {
     }
 
     @MainActor
+    func testQuickSearchDismissesWhenPanelLosesFocus() throws {
+        let app = launchIsolatedApp()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["clipboard.history"].waitForExistence(timeout: 10)
+        )
+
+        openQuickSearch(in: app)
+        let field = app.textFields["quick-search.field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.typeText("temporary query")
+        let pasteboardBeforeFocusLoss = NSPasteboard.general.string(forType: .string)
+
+        // Activating another application causes the Quick Search panel to resign key.
+        XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
+
+        XCTAssertFalse(field.waitForExistence(timeout: 1))
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string), pasteboardBeforeFocusLoss,
+            "Focus loss should dismiss without restoring a clipboard item"
+        )
+
+        // Return to Paperclip, then reopen after implicit dismissal.
+        app.activate()
+        openQuickSearch(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "")
+        app.typeText("focused")
+        XCTAssertEqual(field.value as? String, "focused")
+        field.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
     func testDatabaseStatisticsRefreshesOnItsCoreDataQueue() throws {
         let app = XCUIApplication()
         app.launchArguments += [
