@@ -15,7 +15,7 @@ private final class QuickSearchPanel: NSPanel {
 
 /// Owns the global shortcut and the reusable Quick Search panel.
 @MainActor
-final class QuickSearchManager: ObservableObject {
+final class QuickSearchManager: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = QuickSearchManager()
 
     @Published private(set) var isQuickSearchVisible = false
@@ -27,8 +27,10 @@ final class QuickSearchManager: ObservableObject {
     private var activationObserver: NSObjectProtocol?
     private var lastExternalApplication: NSRunningApplication?
     private var pasteTarget: NSRunningApplication?
+    private var isHidingQuickSearch = false
 
-    private init() {
+    private override init() {
+        super.init()
         rememberExternalApplication(NSWorkspace.shared.frontmostApplication)
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -85,10 +87,14 @@ final class QuickSearchManager: ObservableObject {
     }
 
     func hideQuickSearch() {
+        guard !isHidingQuickSearch else { return }
         guard let panel = window, panel.isVisible else {
             isQuickSearchVisible = false
             return
         }
+
+        isHidingQuickSearch = true
+        defer { isHidingQuickSearch = false }
 
         // Immediate ordering avoids stale animation completions hiding a newly reopened panel.
         panel.orderOut(nil)
@@ -141,6 +147,11 @@ final class QuickSearchManager: ObservableObject {
         application?.bundleIdentifier == Bundle.main.bundleIdentifier
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as? NSPanel === window else { return }
+        hideQuickSearch()
+    }
+
     private func positionOnActiveScreen(_ panel: NSPanel) {
         let pointerLocation = NSEvent.mouseLocation
         let activeScreen = NSScreen.screens.first { NSMouseInRect(pointerLocation, $0.frame, false) }
@@ -181,6 +192,7 @@ final class QuickSearchManager: ObservableObject {
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.delegate = self
         panel.contentViewController = hostingController
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.cornerRadius = 14
