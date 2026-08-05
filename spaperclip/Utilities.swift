@@ -73,6 +73,39 @@ enum Utilities {
         return str
     }
 
+    /// Copies exactly one representation from a content group to a pasteboard.
+    @discardableResult
+    static func copy(
+        _ format: ClipboardFormat,
+        from content: ClipboardContent,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard content.formats.contains(format) else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setData(
+            content.data,
+            forType: NSPasteboard.PasteboardType(format.uti)
+        )
+    }
+
+    /// Copies every representation in one content group to a pasteboard.
+    @discardableResult
+    static func copy(
+        _ content: ClipboardContent,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        pasteboard.clearContents()
+
+        var copiedAnyContent = false
+        for format in content.formats {
+            copiedAnyContent = pasteboard.setData(
+                content.data,
+                forType: NSPasteboard.PasteboardType(format.uti)
+            ) || copiedAnyContent
+        }
+        return copiedAnyContent
+    }
+
     /// Copies all content types from a clipboard history item to a pasteboard.
     @discardableResult
     static func copyAllContentTypes(
@@ -99,7 +132,9 @@ enum Utilities {
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
-        guard let text = item.textRepresentation else { return false }
+        guard let text = item.contents.lazy.compactMap({ $0.searchableText() }).first else {
+            return false
+        }
         pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
     }
@@ -110,16 +145,7 @@ enum Utilities {
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
         guard !content.formats.isEmpty else { return false }
-        pasteboard.clearContents()
-
-        var copiedAnyContent = false
-        for format in content.formats {
-            copiedAnyContent = pasteboard.setData(
-                content.data,
-                forType: NSPasteboard.PasteboardType(format.uti)
-            ) || copiedAnyContent
-        }
-        return copiedAnyContent
+        return copy(content, to: pasteboard)
     }
 }
 

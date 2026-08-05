@@ -202,8 +202,8 @@ class ClipboardPersistenceManager {
     // MARK: - Management Operations
 
     /// Clears all history items
-    func clearAllHistory() {
-        coreDataManager.clearAllData()
+    func clearAllHistory(completion: (() -> Void)? = nil) {
+        coreDataManager.clearAllData(completion: completion)
     }
 
     /// Limits history size to specified number of items

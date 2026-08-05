@@ -118,7 +118,10 @@ final class CoreDataManager: @unchecked Sendable {
     // MARK: - Core Data operations
 
     /// Performs a block on the background context and saves changes
-    func performBackgroundTask(_ block: @escaping (NSManagedObjectContext) -> Void) {
+    func performBackgroundTask(
+        _ block: @escaping (NSManagedObjectContext) -> Void,
+        completion: (() -> Void)? = nil
+    ) {
         logger.info("Starting performBackgroundTask")
 
         // Serialize writes so a restore/promotion cannot overtake the item's original save.
@@ -143,6 +146,10 @@ final class CoreDataManager: @unchecked Sendable {
                     self.logger.info("No changes to save in background context")
                 }
             }
+
+            if let completion {
+                DispatchQueue.main.async(execute: completion)
+            }
         }
     }
 
@@ -159,8 +166,8 @@ final class CoreDataManager: @unchecked Sendable {
     }
 
     /// Clears all clipboard history data
-    func clearAllData() {
-        performBackgroundTask { context in
+    func clearAllData(completion: (() -> Void)? = nil) {
+        performBackgroundTask({ context in
             // Delete all history items (cascading deletion will handle related entities)
             let fetchRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(
                 entityName: "CDClipboardHistoryItem")
@@ -173,7 +180,7 @@ final class CoreDataManager: @unchecked Sendable {
                 self.logger.error(
                     "Failed to clear clipboard history data: \(error.localizedDescription)")
             }
-        }
+        }, completion: completion)
     }
 
     /// Limits the history to a specified number of items by removing oldest entries

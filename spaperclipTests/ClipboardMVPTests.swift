@@ -217,6 +217,95 @@ final class ClipboardMVPTests: XCTestCase {
         XCTAssertTrue(richItem.containsRepresentations(from: plainTextCapture))
     }
 
+    func testHistoryFilterFindsLateMatchInLargeText() {
+        let lateNeedle = "LATE searchable phrase 🌍"
+        let text = String(repeating: "a", count: 120_000) + lateNeedle
+        let item = textItem(text)
+
+        XCTAssertEqual(
+            ClipboardHistoryFilter.matching([item], searchText: "late SEARCHABLE phrase 🌍").map(\.id),
+            [item.id]
+        )
+        XCTAssertFalse(item.textRepresentation?.contains(lateNeedle) == true)
+    }
+
+    func testHistoryFilterFindsLateUTF16Match() {
+        let text = String(repeating: "界", count: 120_000) + "最後の針"
+        let content = ClipboardContent(
+            data: text.data(using: .utf16)!,
+            formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+            description: "UTF-16 text"
+        )
+        let item = ClipboardHistoryItem(
+            timestamp: Date(), contents: [content], sourceApplication: nil)
+
+        XCTAssertEqual(
+            ClipboardHistoryFilter.matching([item], searchText: "最後の針").map(\.id),
+            [item.id]
+        )
+    }
+
+    func testHistoryFilterFindsASCIILateMatchInUTF16Text() {
+        let text = String(repeating: "padding ", count: 20_000) + "ASCII LATE NEEDLE"
+        let content = ClipboardContent(
+            data: text.data(using: .utf16)!,
+            formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+            description: "UTF-16 ASCII text"
+        )
+        let item = ClipboardHistoryItem(
+            timestamp: Date(), contents: [content], sourceApplication: nil)
+
+        XCTAssertEqual(
+            ClipboardHistoryFilter.matching([item], searchText: "ascii late needle").map(\.id),
+            [item.id]
+        )
+    }
+
+    func testSearchableTextCacheReusesDecodedValueAndCanBeCleared() {
+        let content = textItem(String(repeating: "cached ", count: 20_000)).contents[0]
+        let cache = ClipboardSearchTextCache(totalCostLimit: 1_000_000)
+
+        XCTAssertNotNil(content.searchableText(cache: cache))
+        XCTAssertNotNil(content.searchableText(cache: cache))
+        XCTAssertEqual(cache.decodeCount(for: content), 1)
+
+        cache.removeAll()
+        XCTAssertNotNil(content.searchableText(cache: cache))
+        XCTAssertEqual(cache.decodeCount(for: content), 1)
+    }
+
+    func testSingleFormatCopyWritesOnlyRequestedPasteboardType() {
+        let pasteboard = NSPasteboard(name: .init("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let plain = ClipboardFormat(uti: "public.utf8-plain-text")
+        let html = ClipboardFormat(uti: "public.html")
+        let content = ClipboardContent(
+            data: Data("same bytes".utf8),
+            formats: [plain, html],
+            description: "multi-format"
+        )
+
+        XCTAssertTrue(Utilities.copy(plain, from: content, to: pasteboard))
+        XCTAssertTrue(pasteboard.types?.contains(NSPasteboard.PasteboardType(plain.uti)) == true)
+        XCTAssertFalse(pasteboard.types?.contains(NSPasteboard.PasteboardType(html.uti)) == true)
+        XCTAssertNil(pasteboard.data(forType: NSPasteboard.PasteboardType(html.uti)))
+    }
+
+    func testContentGroupCopyWritesEveryFormat() {
+        let pasteboard = NSPasteboard(name: .init("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let formats = [
+            ClipboardFormat(uti: "public.utf8-plain-text"),
+            ClipboardFormat(uti: "public.html"),
+        ]
+        let content = ClipboardContent(
+            data: Data("same bytes".utf8), formats: formats, description: "multi-format")
+
+        XCTAssertTrue(Utilities.copy(content, to: pasteboard))
+        XCTAssertNotNil(pasteboard.data(forType: NSPasteboard.PasteboardType(formats[0].uti)))
+        XCTAssertNotNil(pasteboard.data(forType: NSPasteboard.PasteboardType(formats[1].uti)))
+    }
+
     @MainActor
     func testLayoutAwareShortcutFindsPrintableCharacterKeyCode() {
         guard let keyCode = LayoutAwareShortcutManager.keyCode(for: "s") else {

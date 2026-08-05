@@ -52,6 +52,13 @@ class MenuBarManager: ObservableObject {
             action: #selector(openStatisticsFromMenu),
             keyEquivalent: ""
         ).target = self
+        let clearHistoryItem = menu.addItem(
+            withTitle: "Clear History…",
+            action: #selector(clearHistoryFromMenu),
+            keyEquivalent: ""
+        )
+        clearHistoryItem.target = self
+        clearHistoryItem.setAccessibilityIdentifier("paperclip.clear-history")
         menu.addItem(.separator())
         menu.addItem(
             withTitle: "Quit Paperclip",
@@ -82,6 +89,20 @@ class MenuBarManager: ObservableObject {
     @objc private func openStatisticsFromMenu() {
         guard let clipboardMonitor else { return }
         StatsWindowController.shared.showStatsWindow(clipboardMonitor: clipboardMonitor)
+    }
+
+    @objc private func clearHistoryFromMenu() {
+        guard let clipboardMonitor, !clipboardMonitor.history.isEmpty else { return }
+        ClearHistoryConfirmation.present {
+            clipboardMonitor.clearHistory()
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(clearHistoryFromMenu) {
+            return clipboardMonitor?.history.isEmpty == false
+        }
+        return true
     }
 
     @objc private func quitFromMenu() {
