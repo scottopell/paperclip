@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to embed in a non-publishing notarization dry run
+        required: true
+        default: 0.0.0
+        type: string
 
 jobs:
   release:
@@ -14,12 +21,12 @@ jobs:
       APP_PATH: .build/Release/Build/Products/Release/spaperclip.app
       ARCHIVE_PATH: .build/Paperclip-macOS.zip
       NOTARY_ARCHIVE_PATH: .build/Paperclip-notarization.zip
-      KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
-      ASC_KEY_PATH: ${{ runner.temp }}/paperclip-notary-api-key.p8
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Validate release credentials
         env:
@@ -57,6 +64,7 @@ jobs:
         env:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
         run: |
           P12_PATH="$RUNNER_TEMP/developer-id.p12"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
@@ -80,8 +88,19 @@ jobs:
       - name: Build Developer ID release
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
         run: |
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            RELEASE_VERSION="${{ inputs.version }}"
+          else
+            RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must contain three dot-separated integers" >&2
+            exit 1
+          fi
+
           xcodebuild \
             -project spaperclip.xcodeproj \
             -scheme spaperclip \
@@ -115,6 +134,7 @@ jobs:
           APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/paperclip-notary-api-key.p8
         run: |
           printf '%s\n' "$APP_STORE_CONNECT_API_KEY" > "$ASC_KEY_PATH"
           chmod 600 "$ASC_KEY_PATH"
@@ -133,20 +153,39 @@ jobs:
           spctl --assess --type execute --verbose=2 "$APP_PATH"
           rm -f "$ARCHIVE_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
-          shasum -a 256 "$ARCHIVE_PATH" > "$ARCHIVE_PATH.sha256"
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            ${{ env.ARCHIVE_PATH }}
-            ${{ env.ARCHIVE_PATH }}.sha256
+          ARCHIVE_DIRECTORY="$(dirname "$ARCHIVE_PATH")"
+          ARCHIVE_NAME="$(basename "$ARCHIVE_PATH")"
+          (
+            cd "$ARCHIVE_DIRECTORY"
+            shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          )
 
       - name: Remove signing material
         if: always()
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/paperclip-notary-api-key.p8
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
         run: |
           rm -f "$ASC_KEY_PATH" "$RUNNER_TEMP/developer-id.p12"
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload \
+              "$GITHUB_REF_NAME" \
+              "$ARCHIVE_PATH" \
+              "$ARCHIVE_PATH.sha256" \
+              --clobber
+          else
+            gh release create \
+              "$GITHUB_REF_NAME" \
+              "$ARCHIVE_PATH" \
+              "$ARCHIVE_PATH.sha256" \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME" \
+              --verify-tag
+          fi

@@ -78,6 +78,8 @@ An active Apple Developer Program membership is required.
 
 The workflow imports the certificate into an ephemeral keychain, writes the API key under the runner's temporary directory, and removes both in its cleanup step. No credential belongs in the repository or on the work Mac.
 
+After this workflow reaches `main`, run **Actions → Publish signed macOS release → Run workflow** once with version `0.0.0`. A manual run exercises the certificate import, Developer ID signing, notarization, stapling, Gatekeeper assessment, and packaging, but it does not create a tag or GitHub Release. Use this dry run to verify the six secrets before publishing the first version.
+
 ### Publish
 
 Create a semantic version tag from a reviewed commit and push it:
