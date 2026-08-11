@@ -1,28 +1,191 @@
-name: Create Release
+name: Publish signed macOS release
+
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to embed in a non-publishing notarization dry run
+        required: true
+        default: 0.0.0
+        type: string
+
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     permissions:
       contents: write
+    env:
+      APP_PATH: .build/Release/Build/Products/Release/spaperclip.app
+      ARCHIVE_PATH: .build/Paperclip-macOS.zip
+      NOTARY_ARCHIVE_PATH: .build/Paperclip-notarization.zip
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          draft: true
-          prerelease: false
-          body: |
-            ## spaperclip Release
+          persist-credentials: false
 
-            ### Manual Upload Required
-            This is a placeholder release. App artifacts will be uploaded manually.
+      - name: Validate release credentials
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          for name in \
+            DEVELOPER_ID_P12_BASE64 \
+            DEVELOPER_ID_P12_PASSWORD \
+            APPLE_TEAM_ID \
+            APP_STORE_CONNECT_ISSUER_ID \
+            APP_STORE_CONNECT_KEY_ID \
+            APP_STORE_CONNECT_API_KEY
+          do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret: $name" >&2
+              exit 1
+            fi
+          done
 
-            ### Instructions
-            1. Build the app locally using Xcode
-            2. Create DMG file
-            3. Upload both the app and DMG to this release
+          if [[ ! "$APP_STORE_CONNECT_KEY_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo "APP_STORE_CONNECT_KEY_ID must be a 10-character key ID" >&2
+            exit 1
+          fi
+          if [[ ! "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo "APPLE_TEAM_ID must be a 10-character team ID" >&2
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
+        run: |
+          P12_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$P12_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$P12_PATH"
+
+      - name: Build Developer ID release
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            RELEASE_VERSION="${{ inputs.version }}"
+          else
+            RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must contain three dot-separated integers" >&2
+            exit 1
+          fi
+
+          xcodebuild \
+            -project spaperclip.xcodeproj \
+            -scheme spaperclip \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/Release \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
+            clean build
+
+      - name: Verify signed app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test "$(defaults read "$APP_PATH/Contents/Info" CFBundleIdentifier)" = \
+            "com.scottopell.spaperclip"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 | tee .build/codesign.txt
+          grep -F "Authority=Developer ID Application:" .build/codesign.txt
+          grep -F "TeamIdentifier=$APPLE_TEAM_ID" .build/codesign.txt
+          grep -E '^CodeDirectory .*flags=.*runtime' .build/codesign.txt
+          codesign --display --entitlements - "$APP_PATH" 2>/dev/null | \
+            plutil -extract com.apple.security.app-sandbox raw - | grep -Fx true
+
+      - name: Notarize and staple app
+        env:
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/paperclip-notary-api-key.p8
+        run: |
+          printf '%s\n' "$APP_STORE_CONNECT_API_KEY" > "$ASC_KEY_PATH"
+          chmod 600 "$ASC_KEY_PATH"
+          ditto -c -k --keepParent "$APP_PATH" "$NOTARY_ARCHIVE_PATH"
+          xcrun notarytool submit "$NOTARY_ARCHIVE_PATH" \
+            --key "$ASC_KEY_PATH" \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Validate and package release
+        run: |
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          spctl --assess --type execute --verbose=2 "$APP_PATH"
+          rm -f "$ARCHIVE_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+          ARCHIVE_DIRECTORY="$(dirname "$ARCHIVE_PATH")"
+          ARCHIVE_NAME="$(basename "$ARCHIVE_PATH")"
+          (
+            cd "$ARCHIVE_DIRECTORY"
+            shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          )
+
+      - name: Remove signing material
+        if: always()
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/paperclip-notary-api-key.p8
+          KEYCHAIN_PATH: ${{ runner.temp }}/paperclip-signing.keychain-db
+        run: |
+          rm -f "$ASC_KEY_PATH" "$RUNNER_TEMP/developer-id.p12"
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload \
+              "$GITHUB_REF_NAME" \
+              "$ARCHIVE_PATH" \
+              "$ARCHIVE_PATH.sha256" \
+              --clobber
+          else
+            gh release create \
+              "$GITHUB_REF_NAME" \
+              "$ARCHIVE_PATH" \
+              "$ARCHIVE_PATH.sha256" \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME" \
+              --verify-tag
+          fi

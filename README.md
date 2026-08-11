@@ -45,7 +45,60 @@ xcodebuild \
   build
 ```
 
-The release product is `.build/DerivedData/Build/Products/Release/spaperclip.app`.
+The release product is `.build/DerivedData/Build/Products/Release/spaperclip.app`. Local builds remain useful for development, but they are not the stable distribution identity used by macOS Accessibility. On machines without Apple credentials, use the ad-hoc command-line overrides shown under Tests.
+
+## Signed GitHub releases
+
+Version tags publish a Developer ID-signed, notarized ZIP through `.github/workflows/release.yml`. This is the daily-use build for both Macs. The work Mac needs neither an Apple ID nor signing credentials: download `Paperclip-macOS.zip`, replace `/Applications/spaperclip.app`, and approve Accessibility on its first signed installation.
+
+The stable Accessibility identity depends on keeping the Developer ID team and `com.scottopell.spaperclip` bundle identifier unchanged—not merely on the app name. Continue installing updates at `/Applications/spaperclip.app` and do not replace the daily-use app with an ad-hoc development build.
+
+### One-time setup on the personal Mac
+
+An active Apple Developer Program membership is required.
+
+1. In Certificates, Identifiers & Profiles, create a **Developer ID Application** certificate. Install it and its private key in Keychain Access.
+2. Export the certificate and private key as a password-protected `.p12`, then encode it without line wrapping:
+
+   ```sh
+   base64 -i DeveloperIDApplication.p12 | tr -d '\n' > DeveloperIDApplication.p12.base64
+   ```
+
+3. In App Store Connect, create a team API key with permission to submit software for notarization. Download its `AuthKey_<KEY_ID>.p8` file; Apple only offers this download once.
+4. Add these GitHub repository secrets under **Settings → Secrets and variables → Actions**:
+
+   | Secret | Value |
+   | --- | --- |
+   | `DEVELOPER_ID_P12_BASE64` | Contents of `DeveloperIDApplication.p12.base64` |
+   | `DEVELOPER_ID_P12_PASSWORD` | Password chosen during `.p12` export |
+   | `APPLE_TEAM_ID` | Ten-character Apple Developer team ID |
+   | `APP_STORE_CONNECT_ISSUER_ID` | App Store Connect API issuer UUID |
+   | `APP_STORE_CONNECT_KEY_ID` | API key ID |
+   | `APP_STORE_CONNECT_API_KEY` | Entire `.p8` file, including BEGIN/END lines |
+
+The workflow imports the certificate into an ephemeral keychain, writes the API key under the runner's temporary directory, and removes both in its cleanup step. No credential belongs in the repository or on the work Mac.
+
+After this workflow reaches `main`, run **Actions → Publish signed macOS release → Run workflow** once with version `0.0.0`. A manual run exercises the certificate import, Developer ID signing, notarization, stapling, Gatekeeper assessment, and packaging, but it does not create a tag or GitHub Release. Use this dry run to verify the six secrets before publishing the first version.
+
+### Publish
+
+Create a semantic version tag from a reviewed commit and push it:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow derives `CFBundleShortVersionString` from the tag, uses the GitHub run number as the build number, verifies the Developer ID signature and hardened runtime, notarizes and staples the app, runs Gatekeeper assessment, and attaches the ZIP plus its SHA-256 file to the matching GitHub Release.
+
+Before relying on retained Accessibility trust, perform one certificate-backed two-version check:
+
+1. Install release A at `/Applications/spaperclip.app` and approve it under **System Settings → Privacy & Security → Accessibility**.
+2. Confirm Quick Search Enter pastes into the invoking app.
+3. Publish release B through the same workflow and replace release A at the same path.
+4. Confirm Quick Search Enter still auto-pastes without removing or re-adding Paperclip in Accessibility.
+
+Notarization and TCC continuity cannot be proven by pull-request CI without the repository secrets and two real signed releases, so this check remains a release acceptance step.
 
 ## Tests
 
@@ -125,4 +178,4 @@ Printable-key shortcuts follow their character when switching keyboard layouts (
 - Source application detection is best effort.
 - Large rich-text/HTML values may have limited previews even though their pasteboard data is retained.
 - The app is not configured to launch at login.
-- Distribution signing, notarization, and DMG packaging are not automated.
+- Signed and notarized ZIP releases require the repository's Apple credentials; DMG packaging and automatic updates are intentionally not included.
