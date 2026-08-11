@@ -38,8 +38,21 @@ import os
 
 /// Represents a clipboard data format with its associated UTI (Uniform Type Identifier)
 struct ClipboardFormat: Identifiable, Hashable {
-    let id = UUID()
+    // Identity is the UTI: two formats describe the same clipboard data when
+    // they share a UTI, so Identifiable.id and Hashable/Equatable equality
+    // must both key on `uti`. A per-instance UUID id previously made every
+    // format instance unique and broke duplicate detection in
+    // ClipboardContent/ClipboardHistoryItem.
+    var id: String { uti }
     let uti: String
+
+    static func == (lhs: ClipboardFormat, rhs: ClipboardFormat) -> Bool {
+        lhs.uti == rhs.uti
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(uti)
+    }
 
     /// Provides a human-readable name for the format based on its UTI
     var typeName: String {
@@ -259,33 +272,31 @@ struct ClipboardContent: Identifiable, Hashable {
                 return nil
             }
 
-            // For larger texts, we use byte-based chunking with boundary safety:
-            // 1. Estimate character width based on encoding
-            // 2. Add safety buffer to avoid cutting characters
-            // 3. Convert only the needed chunk to string
+            // For larger texts, decode once and slice by character index.
+            // The previous byte-based math (offset * characterWidth) treated a
+            // character offset as a byte offset; for multi-byte UTF-8 that
+            // lands mid-code-unit, so String(data:encoding:) returns nil and
+            // getTextChunk fails for every non-zero offset. Decoding the whole
+            // Data and slicing by String.Index keeps the character-based
+            // contract and never splits a grapheme.
             let encoding = detectTextEncoding() ?? .utf8
-            let avgBytesPerChar = encoding.characterWidth
-            let startByte = min(offset * avgBytesPerChar, data.count)
-            let extraBytes = 16  // Buffer to ensure we don't cut characters
-            let loadBytes = min(length * avgBytesPerChar + extraBytes, data.count - startByte)
-
-            // Extract data chunk with extra bytes for safety
-            let chunkData = data.subdata(in: startByte..<(startByte + loadBytes))
-
-            // Convert to string
-            if var chunkText = String(data: chunkData, encoding: encoding) {
-                // Limit to requested length in characters
-                if chunkText.count > length {
-                    let endIndex =
-                        chunkText.index(
-                            chunkText.startIndex, offsetBy: length, limitedBy: chunkText.endIndex)
-                        ?? chunkText.endIndex
-                    chunkText = String(chunkText[..<endIndex])
-                }
-
-                // Return the text and the next offset
-                return (chunkText, offset + chunkText.count)
+            guard let fullText = String(data: data, encoding: encoding) else {
+                return nil
             }
+
+            let totalCount = fullText.count
+            guard offset < totalCount else { return nil }
+
+            let startIndex =
+                fullText.index(fullText.startIndex, offsetBy: offset, limitedBy: fullText.endIndex)
+                ?? fullText.endIndex
+            let endOffset = min(offset + length, totalCount)
+            let endIndex =
+                fullText.index(fullText.startIndex, offsetBy: endOffset, limitedBy: fullText.endIndex)
+                ?? fullText.endIndex
+
+            let chunkText = String(fullText[startIndex..<endIndex])
+            return (chunkText, endOffset)
         }
         // Then try RTF format - cannot do partial loading, so load all for small files
         else if formats.first(where: {
@@ -937,6 +948,7 @@ class ClipboardMonitor: ObservableObject {
                 self.history.insert(newItem, at: 0)
                 self.markCurrent(newItem)
                 self.persistenceManager.saveHistoryItem(newItem)
+
             }
 
             // Limit history size to control memory usage

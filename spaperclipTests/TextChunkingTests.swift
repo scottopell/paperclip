@@ -178,4 +178,33 @@ final class TextChunkingTests: XCTestCase {
             XCTAssertEqual(totalText, testText, "Reconstructed text should match original")
         }
     }
+
+    // Regression: large multi-byte text must reconstruct exactly through getTextChunk.
+    // The large-text branch previously treated the character offset as a byte offset
+    // (encoding.characterWidth == 1 for UTF-8), landing mid-code-unit and returning nil.
+    func testLargeMultiByteTextReconstruction() throws {
+        // Build multi-byte text large enough to exceed the 100 KB small-text threshold.
+        let unit = "Hello 🌍 World! こんにちは 世界! Здравствуй мир! 👋👨‍👩‍👧‍👦\n"
+        let largeText = String(repeating: unit, count: 4_000)  // > 100 KB of UTF-8
+        let data = largeText.data(using: .utf8)!
+
+        let content = ClipboardContent(
+            data: data,
+            formats: [ClipboardFormat(uti: UTType.plainText.identifier)],
+            description: "Large multi-byte"
+        )
+
+        var offset = 0
+        var reconstructed = ""
+        while offset < largeText.count {
+            guard let (chunk, nextOffset) = content.getTextChunk(offset: offset, length: 1_000) else {
+                XCTFail("getTextChunk returned nil at offset \(offset)")
+                return
+            }
+            XCTAssertGreaterThan(nextOffset, offset, "must make progress at offset \(offset)")
+            reconstructed += chunk
+            offset = nextOffset
+        }
+        XCTAssertEqual(reconstructed, largeText, "reconstructed text must match original")
+    }
 }

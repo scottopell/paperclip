@@ -147,3 +147,40 @@ Optionally also update `existingItem.timestamp = newItem.timestamp` so "most rec
 - Do not change the `getTextChunk` public signature (character-based offset/length/nextOffset).
 - Do not change `HistoryList`/`HistoryItemRow` display contracts; Bug 2 is fixed at the monitor.
 - Keep the existing ASCII large-text tests green.
+
+## Resolution
+
+Both bugs fixed with minimal changes in `spaperclip/ClipboardMonitor.swift`; tests added in `spaperclipTests/TextChunkingTests.swift` and a new `spaperclipTests/ClipboardMonitorDuplicateTests.swift`.
+
+### Bug 1 — large multi-byte text chunking
+
+Replaced the byte-window math in the `data.count >= 100_000` branch of `getTextChunk` with a single decode + `String.Index` slice, matching the small-text branch's character-based contract. `nextOffset` is now the actual decoded character count.
+
+Red evidence (chunking fix reverted, equality fix in place):
+```
+TextChunkingTests.testLargeMultiByteTextReconstruction: failed - getTextChunk returned nil at offset 889
+```
+Green after fix: `testLargeMultiByteTextReconstruction` passes; all existing ASCII large-text tests still pass.
+
+### Bug 2 — duplicate detection + current-item indicator
+
+Investigation revealed a deeper root cause than the approved plan described: `ClipboardFormat` conformed to `Identifiable, Hashable` with `let id = UUID()`, so the synthesized `Equatable`/`Hashable` keyed on the per-instance UUID. Two `ClipboardFormat(uti: "public.plain-text")` were therefore never equal, which made `ClipboardContent.==` and `ClipboardHistoryItem.==` almost always false, which made `isDuplicate` in `updateFromClipboard` always false — so the duplicate branch was effectively dead code and re-copying identical content inserted duplicate history entries instead of moving the existing item to the top.
+
+Fix: `ClipboardFormat.id` is now `var id: String { uti }` and `==`/`hash` key on `uti` only, so two formats with the same UTI compare equal. With duplicates actually detectable, the duplicate branch in `updateFromClipboard` now also resets `currentItem`/`currentItemID` to `existingItem` so the green "current clipboard" indicator tracks the top history row.
+
+Red evidence (equality fix reverted, chunking fix in place):
+```
+ClipboardMonitorDuplicateTests.testIdenticalContentsAreEqual: XCTAssertEqual failed - items with identical data and formats must be equal
+ClipboardMonitorDuplicateTests.testDuplicateReCopyKeepsCurrentItemIndicatorOnTopItem: XCTAssertTrue failed - sanity: duplicate should match existing item
+```
+Green after fix: both new tests pass.
+
+### Final suite
+
+`xcodebuild -only-testing:spaperclipTests test` → **TEST SUCCEEDED** — 31 tests, 0 failures. The two new regression tests pass alongside the existing text-chunking, text-handling, performance, and quick-search suites with no regressions.
+
+### Files changed
+
+- `spaperclip/ClipboardMonitor.swift` — `ClipboardFormat` semantic equality/hash + `id` keyed on `uti`; large-text `getTextChunk` branch decodes once and slices by `String.Index`; duplicate branch of `updateFromClipboard` resets `currentItem`/`currentItemID` to the moved-to-top item.
+- `spaperclipTests/TextChunkingTests.swift` — added `testLargeMultiByteTextReconstruction`.
+- `spaperclipTests/ClipboardMonitorDuplicateTests.swift` — new file with `testIdenticalContentsAreEqual` and `testDuplicateReCopyKeepsCurrentItemIndicatorOnTopItem`.
