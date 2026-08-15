@@ -119,7 +119,8 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          test "$(defaults read "$APP_PATH/Contents/Info" CFBundleIdentifier)" = \
+          test "$(plutil -extract CFBundleIdentifier raw \
+            "$APP_PATH/Contents/Info.plist")" = \
             "com.scottopell.spaperclip"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           codesign --display --verbose=4 "$APP_PATH" 2>&1 | tee .build/codesign.txt
