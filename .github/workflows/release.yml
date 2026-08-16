@@ -112,7 +112,7 @@ jobs:
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH --timestamp" \
             clean build
 
       - name: Verify signed app
@@ -127,12 +127,19 @@ jobs:
           grep -F "Authority=Developer ID Application:" .build/codesign.txt
           grep -F "TeamIdentifier=$APPLE_TEAM_ID" .build/codesign.txt
           grep -E '^CodeDirectory .*flags=.*runtime' .build/codesign.txt
+          grep -F "Timestamp=" .build/codesign.txt
           codesign --display \
             --entitlements .build/signed-entitlements.plist \
             --xml \
             "$APP_PATH"
           test "$(plutil -extract 'com\.apple\.security\.app-sandbox' raw \
             .build/signed-entitlements.plist)" = true
+          if plutil -extract 'com\.apple\.security\.get-task-allow' raw \
+              .build/signed-entitlements.plist 2>/dev/null | grep -Fx true
+          then
+            echo "Release app must not request get-task-allow" >&2
+            exit 1
+          fi
 
       - name: Notarize and staple app
         env:
