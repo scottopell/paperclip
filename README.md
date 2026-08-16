@@ -45,13 +45,15 @@ xcodebuild \
   build
 ```
 
-The release product is `.build/DerivedData/Build/Products/Release/spaperclip.app`. Local builds remain useful for development, but they are not the stable distribution identity used by macOS Accessibility. On machines without Apple credentials, use the ad-hoc command-line overrides shown under Tests.
+The release product is `.build/DerivedData/Build/Products/Release/Paperclip.app`. Local builds remain useful for development, but they are not the stable distribution identity used by macOS Accessibility. On machines without Apple credentials, use the ad-hoc command-line overrides shown under Tests.
 
 ## Signed GitHub releases
 
-Version tags publish a Developer ID-signed, notarized ZIP through `.github/workflows/release.yml`. This is the daily-use build for both Macs. The work Mac needs neither an Apple ID nor signing credentials: download `Paperclip-macOS.zip`, replace `/Applications/spaperclip.app`, and approve Accessibility on its first signed installation.
+Version tags publish a Developer ID-signed, notarized ZIP through `.github/workflows/release.yml`. This is the daily-use build for both Macs. The work Mac needs neither an Apple ID nor signing credentials: download `Paperclip-macOS.zip`, replace `/Applications/Paperclip.app`, and approve Accessibility on its first signed installation.
 
-The stable Accessibility identity depends on keeping the Developer ID team and `com.scottopell.spaperclip` bundle identifier unchanged—not merely on the app name. Continue installing updates at `/Applications/spaperclip.app` and do not replace the daily-use app with an ad-hoc development build.
+When upgrading from v1.0.0, first quit and remove `/Applications/spaperclip.app`, then install the new app at `/Applications/Paperclip.app`. Do not leave both copies installed. Because the installed path changes once, macOS may ask you to approve Paperclip in Accessibility again; later releases should replace `/Applications/Paperclip.app` in place.
+
+The stable Accessibility identity depends on keeping the Developer ID team and `com.scottopell.spaperclip` bundle identifier unchanged—not merely on the app name. Continue installing updates at `/Applications/Paperclip.app` and do not replace the daily-use app with an ad-hoc development build.
 
 ### One-time setup on the personal Mac
 
@@ -93,7 +95,7 @@ The workflow derives `CFBundleShortVersionString` from the tag, uses the GitHub 
 
 Before relying on retained Accessibility trust, perform one certificate-backed two-version check:
 
-1. Install release A at `/Applications/spaperclip.app` and approve it under **System Settings → Privacy & Security → Accessibility**.
+1. Install release A at `/Applications/Paperclip.app` and approve it under **System Settings → Privacy & Security → Accessibility**.
 2. Confirm Quick Search Enter pastes into the invoking app.
 3. Publish release B through the same workflow and replace release A at the same path.
 4. Confirm Quick Search Enter still auto-pastes without removing or re-adding Paperclip in Accessibility.

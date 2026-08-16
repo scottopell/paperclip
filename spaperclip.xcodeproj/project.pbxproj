@@ -28,7 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		47AEC6C82DC6B8B300E2B7EA /* spaperclip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = spaperclip.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		47AEC6C82DC6B8B300E2B7EA /* Paperclip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Paperclip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		47AEC6D92DC6B8B500E2B7EA /* spaperclipTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = spaperclipTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		47AEC6E32DC6B8B500E2B7EA /* spaperclipUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = spaperclipUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -114,7 +114,7 @@
 		47AEC6C92DC6B8B300E2B7EA /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				47AEC6C82DC6B8B300E2B7EA /* spaperclip.app */,
+				47AEC6C82DC6B8B300E2B7EA /* Paperclip.app */,
 				47AEC6D92DC6B8B500E2B7EA /* spaperclipTests.xctest */,
 				47AEC6E32DC6B8B500E2B7EA /* spaperclipUITests.xctest */,
 			);
@@ -144,7 +144,7 @@
 				A10000032E00000100000001 /* KeyboardShortcuts */,
 			);
 			productName = spaperclip;
-			productReference = 47AEC6C82DC6B8B300E2B7EA /* spaperclip.app */;
+			productReference = 47AEC6C82DC6B8B300E2B7EA /* Paperclip.app */;
 			productType = "com.apple.product-type.application";
 		};
 		47AEC6D82DC6B8B500E2B7EA /* spaperclipTests */ = {
@@ -468,7 +468,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.scottopell.spaperclip;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = spaperclip;
+				PRODUCT_NAME = Paperclip;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -499,7 +500,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.scottopell.spaperclip;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = spaperclip;
+				PRODUCT_NAME = Paperclip;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -519,7 +521,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/spaperclip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/spaperclip";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Paperclip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Paperclip";
 			};
 			name = Debug;
 		};
@@ -537,7 +539,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/spaperclip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/spaperclip";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Paperclip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Paperclip";
 			};
 			name = Release;
 		};
