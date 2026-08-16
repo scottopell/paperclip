@@ -19,6 +19,8 @@ Paperclip is a small macOS clipboard-history app. While it is running, it record
 
 Paperclip must be running to monitor the clipboard or respond to its global shortcut. Launch at login is not part of the current MVP.
 
+Paperclip runs as a menu-bar accessory and intentionally does not appear in the Dock or Command-Tab application switcher. Use the menu-bar icon to open Clipboard History, Quick Search, Settings, or other secondary windows.
+
 ## Build from source
 
 The Xcode project is the authoritative build. It resolves the pinned `KeyboardShortcuts` Swift package automatically.
@@ -137,29 +139,9 @@ xcodebuild \
 
 The performance tests print their configuration, raw samples, and median. Use a consistent machine and configuration for comparisons. The ad-hoc workspace cannot load the project's Release test bundle because macOS requires its host and test bundle to have matching development-team signatures; optimized standalone measurements established the original baseline and candidate, while these production-path XCTest gates provide repeatable regression limits.
 
-Run the accessibility-driven UI tests with local ad-hoc signing:
+The UI-test target retains accessibility-driven journeys for Clipboard History and Quick Search. XCUITest activates the host application before selecting an open status-menu item, which closes the menu of an accessory app, so it cannot reliably cross this macOS boundary in Paperclip's production activation mode. Do not add a test-only activation-policy override.
 
-```sh
-xcodebuild \
-  -project spaperclip.xcodeproj \
-  -scheme spaperclip \
-  -configuration Debug \
-  -destination 'platform=macOS' \
-  -derivedDataPath .build/XCUITestDerivedData \
-  DEVELOPMENT_TEAM= \
-  CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY=- \
-  AD_HOC_CODE_SIGNING_ALLOWED=YES \
-  -only-testing:spaperclipUITests/spaperclipUITests/testQuietLaunchAndOpenClipboardHistory \
-  -only-testing:spaperclipUITests/spaperclipUITests/testCaptureSearchAndRestoreText \
-  -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchKeyboardJourney \
-  -only-testing:spaperclipUITests/spaperclipUITests/testQuickSearchPlainTextRestore \
-  test
-```
-
-The app uses a separate, freshly reset Core Data store when `SPAPERCLIP_UI_TEST_ID` is supplied by these tests, so UI automation does not read or clear normal clipboard history. Do not set `CODE_SIGNING_ALLOWED=NO` for UI tests: macOS cannot launch an unsigned XCUITest runner.
-
-XCUITest reliably covers the same Quick Search panel through its menu command, including focus, filtering, navigation, restore, reinvocation, and dismissal. macOS does not deliver the library's global hotkey from XCUITest's synthetic Finder keystroke, so the configured shortcut from another app remains one manual acceptance check.
+For accessory-app changes, launch a built app and confirm that Paperclip appears in the menu bar but not the Dock or Command-Tab switcher, Clipboard History opens and reopens from the menu-bar item, and the global Quick Search shortcut still opens from another app. The configured shortcut remains a manual acceptance check because macOS also does not deliver the library's global hotkey from XCUITest's synthetic Finder keystroke.
 
 ## Quick Search
 

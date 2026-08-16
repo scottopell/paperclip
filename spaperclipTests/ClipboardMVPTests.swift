@@ -17,6 +17,16 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    func testAppDeclaresMenuBarAccessoryActivationPolicy() {
+        let appBundle = Bundle(for: AppDelegate.self)
+
+        XCTAssertEqual(
+            appBundle.object(forInfoDictionaryKey: "LSUIElement") as? Bool,
+            true,
+            "Paperclip should stay out of the Dock and application switcher"
+        )
+    }
+
     func testHistoryFilterIsCaseInsensitiveAndPreservesOrder() {
         let first = textItem("Alpha result")
         let second = textItem("unrelated")
