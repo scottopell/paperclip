@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: write
     env:
-      APP_PATH: .build/Release/Build/Products/Release/spaperclip.app
+      APP_PATH: .build/Release/Build/Products/Release/Paperclip.app
       ARCHIVE_PATH: .build/Paperclip-macOS.zip
       NOTARY_ARCHIVE_PATH: .build/Paperclip-notarization.zip
 
