@@ -144,11 +144,33 @@ jobs:
           printf '%s\n' "$APP_STORE_CONNECT_API_KEY" > "$ASC_KEY_PATH"
           chmod 600 "$ASC_KEY_PATH"
           ditto -c -k --keepParent "$APP_PATH" "$NOTARY_ARCHIVE_PATH"
-          xcrun notarytool submit "$NOTARY_ARCHIVE_PATH" \
-            --key "$ASC_KEY_PATH" \
-            --key-id "$APP_STORE_CONNECT_KEY_ID" \
-            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
-            --wait
+          NOTARY_RESULT_PATH=.build/notary-result.json
+          NOTARY_LOG_PATH=.build/notary-log.json
+          if xcrun notarytool submit "$NOTARY_ARCHIVE_PATH" \
+              --key "$ASC_KEY_PATH" \
+              --key-id "$APP_STORE_CONNECT_KEY_ID" \
+              --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+              --wait \
+              --output-format json > "$NOTARY_RESULT_PATH"
+          then
+            NOTARY_EXIT=0
+          else
+            NOTARY_EXIT=$?
+          fi
+
+          cat "$NOTARY_RESULT_PATH"
+          SUBMISSION_ID="$(plutil -extract id raw "$NOTARY_RESULT_PATH")"
+          NOTARY_STATUS="$(plutil -extract status raw "$NOTARY_RESULT_PATH")"
+
+          if [[ "$NOTARY_EXIT" -ne 0 || "$NOTARY_STATUS" != "Accepted" ]]; then
+            xcrun notarytool log "$SUBMISSION_ID" "$NOTARY_LOG_PATH" \
+              --key "$ASC_KEY_PATH" \
+              --key-id "$APP_STORE_CONNECT_KEY_ID" \
+              --issuer "$APP_STORE_CONNECT_ISSUER_ID"
+            cat "$NOTARY_LOG_PATH"
+            exit 1
+          fi
+
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
