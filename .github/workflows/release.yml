@@ -127,8 +127,12 @@ jobs:
           grep -F "Authority=Developer ID Application:" .build/codesign.txt
           grep -F "TeamIdentifier=$APPLE_TEAM_ID" .build/codesign.txt
           grep -E '^CodeDirectory .*flags=.*runtime' .build/codesign.txt
-          codesign --display --entitlements - "$APP_PATH" 2>/dev/null | \
-            plutil -extract com.apple.security.app-sandbox raw - | grep -Fx true
+          codesign --display \
+            --entitlements .build/signed-entitlements.plist \
+            --xml \
+            "$APP_PATH"
+          test "$(plutil -extract 'com\.apple\.security\.app-sandbox' raw \
+            .build/signed-entitlements.plist)" = true
 
       - name: Notarize and staple app
         env:
