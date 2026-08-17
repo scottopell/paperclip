@@ -134,7 +134,6 @@ struct ShortcutSettingsView: View {
         .formStyle(.grouped)
         .padding()
         .frame(width: 460, height: 180)
-        .navigationTitle("Shortcuts")
         .accessibilityIdentifier("settings.shortcuts")
     }
 }

@@ -27,6 +27,25 @@ final class ClipboardMVPTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testSettingsWindowControllerOwnsReusableWindow() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+
+        XCTAssertEqual(window.title, "Paperclip Settings")
+        XCTAssertFalse(window.isReleasedWhenClosed)
+
+        controller.showSettings()
+        XCTAssertTrue(window.isVisible)
+
+        XCTAssertFalse(controller.windowShouldClose(window))
+        XCTAssertFalse(window.isVisible)
+
+        controller.showSettings()
+        XCTAssertTrue(window.isVisible)
+        window.orderOut(nil)
+    }
+
     func testHistoryFilterIsCaseInsensitiveAndPreservesOrder() {
         let first = textItem("Alpha result")
         let second = textItem("unrelated")
