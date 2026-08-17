@@ -37,6 +37,8 @@ final class ClipboardMVPTests: XCTestCase {
 
         controller.showSettings()
         XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(window.contentLayoutRect.width, 460, accuracy: 1)
+        XCTAssertEqual(window.contentLayoutRect.height, 180, accuracy: 1)
 
         XCTAssertFalse(controller.windowShouldClose(window))
         XCTAssertFalse(window.isVisible)

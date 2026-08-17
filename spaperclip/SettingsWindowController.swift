@@ -16,6 +16,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         window.title = "Paperclip Settings"
         window.contentViewController = hostingController
+        window.setContentSize(NSSize(width: 460, height: 180))
         window.isReleasedWhenClosed = false
         window.center()
 
