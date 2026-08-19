@@ -166,7 +166,7 @@ Green after fix: `testLargeMultiByteTextReconstruction` passes; all existing ASC
 
 Investigation revealed a deeper root cause than the approved plan described: `ClipboardFormat` conformed to `Identifiable, Hashable` with `let id = UUID()`, so the synthesized `Equatable`/`Hashable` keyed on the per-instance UUID. Two `ClipboardFormat(uti: "public.plain-text")` were therefore never equal, which made `ClipboardContent.==` and `ClipboardHistoryItem.==` almost always false, which made `isDuplicate` in `updateFromClipboard` always false — so the duplicate branch was effectively dead code and re-copying identical content inserted duplicate history entries instead of moving the existing item to the top.
 
-Fix: `ClipboardFormat` keeps a UUID for stable SwiftUI identity while `==`/`hash` compare only `uti`. Duplicate application moved into `applyHistoryItem`, the same production method used by pasteboard capture and tests. Payload matching is order-independent for contents/formats, preserves source-application distinctions, and resets `currentItem`/`currentItemID` to the moved row.
+Fix: `ClipboardFormat` keeps a UUID for stable SwiftUI identity while `==`/`hash` compare only `uti`. Duplicate application moved into `applyHistoryItem`, the same production method used by pasteboard capture and tests. Matching uses reproducible clipboard representations; promotion preserves the existing row identity and source attribution, refreshes its timestamp, and resets `currentItem`/`currentItemID` to that row.
 
 Red evidence (equality fix reverted, chunking fix in place):
 ```
@@ -177,7 +177,7 @@ Green after fix: both new tests pass.
 
 ### Final suite
 
-`xcodebuild -only-testing:spaperclipTests test` → **TEST SUCCEEDED** — 33 tests, 0 failures. Regression coverage now exercises the real monitor path, order-independent payload matching, source distinctions, stable view identity, and large multi-byte chunking.
+`xcodebuild -only-testing:spaperclipTests test` → **TEST SUCCEEDED** — 51 tests, 0 failures after rebasing onto current `origin/main`. Regression coverage exercises the real monitor path, representation matching, source attribution, stable view identity, and large multi-byte chunking.
 
 ### Files changed
 
