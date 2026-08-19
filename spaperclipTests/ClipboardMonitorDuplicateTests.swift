@@ -9,75 +9,91 @@ import XCTest
 
 @MainActor
 final class ClipboardMonitorDuplicateTests: XCTestCase {
-    private func makeItem(text: String) -> ClipboardHistoryItem {
+    private func makeContent(
+        text: String,
+        formats: [String] = [UTType.plainText.identifier]
+    ) -> ClipboardContent {
+        ClipboardContent(
+            data: text.data(using: .utf8)!,
+            formats: formats.map(ClipboardFormat.init(uti:)),
+            description: text
+        )
+    }
+
+    private func makeItem(
+        contents: [ClipboardContent],
+        source: SourceApplicationInfo? = nil
+    ) -> ClipboardHistoryItem {
         ClipboardHistoryItem(
             timestamp: Date(),
-            contents: [
-                ClipboardContent(
-                    data: text.data(using: .utf8)!,
-                    formats: [ClipboardFormat(uti: UTType.plainText.identifier)],
-                    description: text
-                )
-            ],
-            sourceApplication: nil
+            contents: contents,
+            sourceApplication: source
         )
     }
 
-    // Regression: two clipboard items built from identical data and formats
-    // must compare equal so updateFromClipboard can detect duplicates.
-    // Previously ClipboardFormat equality included the per-instance UUID id,
-    // so no two formats were ever equal and duplicate detection never matched.
-    func testIdenticalContentsAreEqual() {
-        let a = makeItem(text: "hello")
-        let b = makeItem(text: "hello")
-        XCTAssertEqual(a, b, "items with identical data and formats must be equal")
-        XCTAssertEqual(a.hashValue, b.hashValue, "equal items must hash equally")
+    func testClipboardFormatUsesStableViewIdentityAndSemanticEquality() {
+        let a = ClipboardFormat(uti: UTType.plainText.identifier)
+        let b = ClipboardFormat(uti: UTType.plainText.identifier)
+
+        XCTAssertNotEqual(a.id, b.id, "separate views keep separate identities")
+        XCTAssertEqual(a, b, "formats with the same UTI are semantically equal")
+        XCTAssertEqual(a.hashValue, b.hashValue, "equal formats must hash equally")
     }
 
-    // Regression: when the user re-copies identical content, updateFromClipboard
-    // moves the existing item to the top and must keep the "current clipboard"
-    // indicator pointing at the top row. Previously the duplicate branch left
-    // currentItemID pointing at the never-inserted newItem.
-    func testDuplicateReCopyKeepsCurrentItemIndicatorOnTopItem() {
-        // Seed history with one item.
-        let first = makeItem(text: "hello")
-        var history: [ClipboardHistoryItem] = [first]
-        var currentItem: ClipboardHistoryItem? = first
-        var currentItemID: UUID? = first.id
-        var selectedHistoryItem: ClipboardHistoryItem? = first
+    func testDuplicateReCopyUsesProductionPathAndKeepsCurrentIndicatorOnTopItem() {
+        let monitor = ClipboardMonitor(loadPersistedHistory: false)
+        let first = makeItem(contents: [makeContent(text: "hello")])
+        let duplicate = makeItem(contents: [makeContent(text: "hello")])
 
-        // Simulate the user re-copying the *same* content from another app:
-        // updateFromClipboard builds a fresh newItem from the pasteboard.
-        let newItem = makeItem(text: "hello")
+        monitor.applyHistoryItem(first, persist: false)
+        monitor.applyHistoryItem(duplicate, persist: false)
 
-        // Mirror updateFromClipboard's main-queue block (ClipboardMonitor.swift:754-803).
-        currentItem = newItem
-        currentItemID = newItem.id
+        XCTAssertEqual(monitor.history.count, 1, "duplicate payload should reuse one row")
+        XCTAssertEqual(monitor.history.first?.id, first.id, "existing row should move to the top")
+        XCTAssertEqual(monitor.selectedHistoryItem?.id, first.id)
+        XCTAssertEqual(monitor.currentItem?.id, first.id)
+        XCTAssertEqual(monitor.currentItemID, first.id)
+    }
 
-        let isDuplicate = history.contains { $0 == newItem }
-        XCTAssertTrue(isDuplicate, "sanity: duplicate should match existing item")
-
-        if !isDuplicate {
-            history.insert(newItem, at: 0)
-            selectedHistoryItem = newItem
-        } else if let index = history.firstIndex(where: { $0 == newItem }) {
-            let existingItem = history.remove(at: index)
-            history.insert(existingItem, at: 0)
-            selectedHistoryItem = existingItem
-            // Fix: keep the current-clipboard indicator on the row that lives in history.
-            currentItem = existingItem
-            currentItemID = existingItem.id
-        }
-
-        // The current-clipboard indicator must point at a row that exists in history.
-        let currentID = currentItemID
-        XCTAssertNotNil(
-            history.first(where: { $0.id == currentID }),
-            "currentItemID must reference an item present in history"
+    func testDuplicateDetectionIgnoresContentAndFormatOrdering() {
+        let monitor = ClipboardMonitor(loadPersistedHistory: false)
+        let text = makeContent(
+            text: "hello",
+            formats: [UTType.plainText.identifier, UTType.utf8PlainText.identifier]
         )
-        XCTAssertEqual(
-            history.first?.id, currentID,
-            "the top history row must be the current item"
+        let image = ClipboardContent(
+            data: Data([0x89, 0x50, 0x4E, 0x47]),
+            formats: [ClipboardFormat(uti: UTType.png.identifier)],
+            description: "Binary data (4 bytes)"
         )
+        let first = makeItem(contents: [text, image])
+        let reorderedText = makeContent(
+            text: "hello",
+            formats: [UTType.utf8PlainText.identifier, UTType.plainText.identifier]
+        )
+        let duplicate = makeItem(contents: [image, reorderedText])
+
+        monitor.applyHistoryItem(first, persist: false)
+        monitor.applyHistoryItem(duplicate, persist: false)
+
+        XCTAssertEqual(monitor.history.count, 1)
+        XCTAssertEqual(monitor.currentItemID, first.id)
+    }
+
+    func testDuplicateCaptureKeepsOriginalSourceAttribution() {
+        let monitor = ClipboardMonitor(loadPersistedHistory: false)
+        let content = makeContent(text: "hello")
+        let safari = SourceApplicationInfo(bundleIdentifier: "com.apple.Safari", applicationName: "Safari")
+        let notes = SourceApplicationInfo(bundleIdentifier: "com.apple.Notes", applicationName: "Notes")
+        let first = makeItem(contents: [content], source: safari)
+        let duplicate = makeItem(contents: [content], source: notes)
+
+        monitor.applyHistoryItem(first, persist: false)
+        monitor.applyHistoryItem(duplicate, persist: false)
+
+        XCTAssertEqual(monitor.history.count, 1)
+        XCTAssertEqual(monitor.history.first?.id, first.id)
+        XCTAssertEqual(monitor.history.first?.sourceApplication, safari)
+        XCTAssertEqual(monitor.history.first?.timestamp, duplicate.timestamp)
     }
 }

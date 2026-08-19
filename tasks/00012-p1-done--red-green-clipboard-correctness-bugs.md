@@ -154,7 +154,7 @@ Both bugs fixed with minimal changes in `spaperclip/ClipboardMonitor.swift`; tes
 
 ### Bug 1 — large multi-byte text chunking
 
-Replaced the byte-window math in the `data.count >= 100_000` branch of `getTextChunk` with a single decode + `String.Index` slice, matching the small-text branch's character-based contract. `nextOffset` is now the actual decoded character count.
+Replaced byte-offset math with a thread-safe, one-time decode cache plus `String.Index` slices. Multi-byte characters are never split, repeated chunk reads do not repeatedly decode the full payload, and `nextOffset` remains character-based.
 
 Red evidence (chunking fix reverted, equality fix in place):
 ```
@@ -166,7 +166,7 @@ Green after fix: `testLargeMultiByteTextReconstruction` passes; all existing ASC
 
 Investigation revealed a deeper root cause than the approved plan described: `ClipboardFormat` conformed to `Identifiable, Hashable` with `let id = UUID()`, so the synthesized `Equatable`/`Hashable` keyed on the per-instance UUID. Two `ClipboardFormat(uti: "public.plain-text")` were therefore never equal, which made `ClipboardContent.==` and `ClipboardHistoryItem.==` almost always false, which made `isDuplicate` in `updateFromClipboard` always false — so the duplicate branch was effectively dead code and re-copying identical content inserted duplicate history entries instead of moving the existing item to the top.
 
-Fix: `ClipboardFormat.id` is now `var id: String { uti }` and `==`/`hash` key on `uti` only, so two formats with the same UTI compare equal. With duplicates actually detectable, the duplicate branch in `updateFromClipboard` now also resets `currentItem`/`currentItemID` to `existingItem` so the green "current clipboard" indicator tracks the top history row.
+Fix: `ClipboardFormat` keeps a UUID for stable SwiftUI identity while `==`/`hash` compare only `uti`. Duplicate application moved into `applyHistoryItem`, the same production method used by pasteboard capture and tests. Payload matching is order-independent for contents/formats, preserves source-application distinctions, and resets `currentItem`/`currentItemID` to the moved row.
 
 Red evidence (equality fix reverted, chunking fix in place):
 ```
@@ -177,10 +177,10 @@ Green after fix: both new tests pass.
 
 ### Final suite
 
-`xcodebuild -only-testing:spaperclipTests test` → **TEST SUCCEEDED** — 31 tests, 0 failures. The two new regression tests pass alongside the existing text-chunking, text-handling, performance, and quick-search suites with no regressions.
+`xcodebuild -only-testing:spaperclipTests test` → **TEST SUCCEEDED** — 33 tests, 0 failures. Regression coverage now exercises the real monitor path, order-independent payload matching, source distinctions, stable view identity, and large multi-byte chunking.
 
 ### Files changed
 
-- `spaperclip/ClipboardMonitor.swift` — `ClipboardFormat` semantic equality/hash + `id` keyed on `uti`; large-text `getTextChunk` branch decodes once and slices by `String.Index`; duplicate branch of `updateFromClipboard` resets `currentItem`/`currentItemID` to the moved-to-top item.
-- `spaperclipTests/TextChunkingTests.swift` — added `testLargeMultiByteTextReconstruction`.
-- `spaperclipTests/ClipboardMonitorDuplicateTests.swift` — new file with `testIdenticalContentsAreEqual` and `testDuplicateReCopyKeepsCurrentItemIndicatorOnTopItem`.
+- `spaperclip/ClipboardMonitor.swift` — semantic format equality with UUID view identity; cached text decoding; testable production history application; order-independent payload matching.
+- `spaperclipTests/TextChunkingTests.swift` — large multi-byte reconstruction regression.
+- `spaperclipTests/ClipboardMonitorDuplicateTests.swift` — real monitor-path tests for dedupe, current-item state, ordering, source attribution, and identity/equality separation.
