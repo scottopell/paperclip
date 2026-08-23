@@ -9,16 +9,19 @@ class MenuBarManager: ObservableObject {
     private var statusItem: NSStatusItem?
     private weak var clipboardMonitor: ClipboardMonitor?
     private var onOpenHistory: (() -> Void)?
+    private var onOpenSettings: (() -> Void)?
 
     private init() {}
 
     /// Sets up the menu bar item with the statistics view
     func setupMenuBar(
         clipboardMonitor: ClipboardMonitor,
-        onOpenHistory: @escaping () -> Void
+        onOpenHistory: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void
     ) {
         self.clipboardMonitor = clipboardMonitor
         self.onOpenHistory = onOpenHistory
+        self.onOpenSettings = onOpenSettings
         guard statusItem == nil else { return }
         // Create the status item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -78,12 +81,7 @@ class MenuBarManager: ObservableObject {
     }
 
     @objc private func openSettingsFromMenu() {
-        NSApplication.shared.sendAction(
-            Selector(("showSettingsWindow:")),
-            to: nil,
-            from: nil
-        )
-        NSApplication.shared.activate()
+        onOpenSettings?()
     }
 
     @objc private func openStatisticsFromMenu() {
