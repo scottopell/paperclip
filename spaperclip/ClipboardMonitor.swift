@@ -38,8 +38,17 @@ import os
 
 /// Represents a clipboard data format with its associated UTI (Uniform Type Identifier)
 struct ClipboardFormat: Identifiable, Hashable {
+    // SwiftUI identity is per value instance; semantic equality is the UTI.
     let id = UUID()
     let uti: String
+
+    static func == (lhs: ClipboardFormat, rhs: ClipboardFormat) -> Bool {
+        lhs.uti == rhs.uti
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(uti)
+    }
 
     /// Provides a human-readable name for the format based on its UTI
     var typeName: String {
@@ -97,6 +106,7 @@ final class ClipboardSearchTextCache {
 
     private let cache = NSCache<NSUUID, NSString>()
     private let matchCache = NSCache<NSString, NSNumber>()
+    private let textLock = NSLock()
     private let lock = NSLock()
     private var decodeCounts: [UUID: Int] = [:]
 
@@ -106,12 +116,14 @@ final class ClipboardSearchTextCache {
     }
 
     func text(for content: ClipboardContent, decode: () -> String?) -> String? {
+        textLock.lock()
+        defer { textLock.unlock() }
+
         let key = content.id as NSUUID
         if let cached = cache.object(forKey: key) { return cached as String }
 
         guard let text = decode() else { return nil }
-        let value = text as NSString
-        cache.setObject(value, forKey: key, cost: text.utf8.count)
+        cache.setObject(text as NSString, forKey: key, cost: text.utf8.count)
         lock.lock()
         decodeCounts[content.id, default: 0] += 1
         lock.unlock()
@@ -143,6 +155,7 @@ final class ClipboardSearchTextCache {
         lock.unlock()
     }
 }
+
 
 /// Represents a single piece of data from the clipboard with its available formats
 /// Implements efficient handling of potentially large data objects
@@ -230,9 +243,7 @@ struct ClipboardContent: Identifiable, Hashable {
     }
 
     /// Gets a chunk of text at specified position with specified length
-    /// Uses a memory-efficient approach for large text content:
-    /// - For small texts (<100KB): loads entire content
-    /// - For large texts: loads only the requested chunk
+    /// Decodes plain text once, caches it, then returns character-safe slices.
     /// - Parameters:
     ///   - offset: Character offset from the beginning
     ///   - length: Maximum length to read in characters
@@ -242,50 +253,21 @@ struct ClipboardContent: Identifiable, Hashable {
         if formats.first(where: {
             $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
         }) != nil {
-            // For very small texts, just load the whole thing
-            if data.count < 100_000 {
-                if let fullText = String(data: data, encoding: .utf8) {
-                    let endOffset = min(offset + length, fullText.count)
-                    let startIndex =
-                        fullText.index(
-                            fullText.startIndex, offsetBy: offset, limitedBy: fullText.endIndex)
-                        ?? fullText.endIndex
-                    let endIndex =
-                        fullText.index(
-                            fullText.startIndex, offsetBy: endOffset, limitedBy: fullText.endIndex)
-                        ?? fullText.endIndex
-                    return (String(fullText[startIndex..<endIndex]), endOffset)
-                }
-                return nil
-            }
+            guard let fullText = decodedPlainText() else { return nil }
 
-            // For larger texts, we use byte-based chunking with boundary safety:
-            // 1. Estimate character width based on encoding
-            // 2. Add safety buffer to avoid cutting characters
-            // 3. Convert only the needed chunk to string
-            let encoding = detectTextEncoding() ?? .utf8
-            let avgBytesPerChar = encoding.characterWidth
-            let startByte = min(offset * avgBytesPerChar, data.count)
-            let extraBytes = 16  // Buffer to ensure we don't cut characters
-            let loadBytes = min(length * avgBytesPerChar + extraBytes, data.count - startByte)
+            let totalCount = fullText.count
+            guard offset < totalCount else { return nil }
 
-            // Extract data chunk with extra bytes for safety
-            let chunkData = data.subdata(in: startByte..<(startByte + loadBytes))
+            let startIndex =
+                fullText.index(fullText.startIndex, offsetBy: offset, limitedBy: fullText.endIndex)
+                ?? fullText.endIndex
+            let endOffset = min(offset + length, totalCount)
+            let endIndex =
+                fullText.index(fullText.startIndex, offsetBy: endOffset, limitedBy: fullText.endIndex)
+                ?? fullText.endIndex
 
-            // Convert to string
-            if var chunkText = String(data: chunkData, encoding: encoding) {
-                // Limit to requested length in characters
-                if chunkText.count > length {
-                    let endIndex =
-                        chunkText.index(
-                            chunkText.startIndex, offsetBy: length, limitedBy: chunkText.endIndex)
-                        ?? chunkText.endIndex
-                    chunkText = String(chunkText[..<endIndex])
-                }
-
-                // Return the text and the next offset
-                return (chunkText, offset + chunkText.count)
-            }
+            let chunkText = String(fullText[startIndex..<endIndex])
+            return (chunkText, endOffset)
         }
         // Then try RTF format - cannot do partial loading, so load all for small files
         else if formats.first(where: {
@@ -339,15 +321,17 @@ struct ClipboardContent: Identifiable, Hashable {
         return nil
     }
 
+    private func decodedPlainText(cache: ClipboardSearchTextCache = .shared) -> String? {
+        cache.text(for: self) { decodeSearchableText() }
+    }
+
     /// Decodes the complete text used by the detail view. This runs off the main
     /// thread in `LazyTextView`, then AppKit receives a single string assignment.
     func textForDisplay() -> String? {
         if formats.contains(where: {
             $0.uti == UTType.plainText.identifier || $0.uti == "public.utf8-plain-text"
         }) {
-            if let text = String(data: data, encoding: .utf8) { return text }
-            if let text = String(data: data, encoding: .utf16) { return text }
-            return String(data: data, encoding: .ascii)
+            return decodedPlainText()
         }
 
         if formats.contains(where: {
@@ -670,11 +654,17 @@ class ClipboardMonitor: ObservableObject {
     // Add a flag to track initial state
     private var initialStartupComplete = false
 
-    init() {
+    init(loadPersistedHistory: Bool = true) {
         logger.info("Application starting")
 
         let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
+
+        guard loadPersistedHistory else {
+            initialStartupComplete = true
+            logger.info("Initialization completed without persistence or monitoring")
+            return
+        }
 
         // Simply load history first
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -918,36 +908,7 @@ class ClipboardMonitor: ObservableObject {
             sourceApplication: sourceAppInfo
         )
 
-        if !contents.isEmpty {
-            if let existingItem = self.history.first(where: {
-                $0.containsRepresentations(from: newItem.contents)
-            }) {
-                let promoted = ClipboardHistoryState.promoting(
-                    existingItem, in: self.history, at: newItem.timestamp)
-                self.history = promoted.history
-                self.currentItem = promoted.item
-                self.currentItemID = promoted.item.id
-                self.selectedHistoryItem = promoted.item
-                self.persistenceManager.promoteHistoryItem(
-                    existingItem, to: promoted.item.timestamp)
-
-                self.logger.info("Duplicate item detected - moved existing to top")
-            } else {
-                // Insert at beginning (most recent first)
-                self.history.insert(newItem, at: 0)
-                self.markCurrent(newItem)
-                self.persistenceManager.saveHistoryItem(newItem)
-            }
-
-            // Limit history size to control memory usage
-            // 100 items balances usability with performance
-            if self.history.count > 100 {
-                self.history = Array(self.history.prefix(100))
-
-                // Also limit the persisted history size
-                self.persistenceManager.limitHistorySize(to: 100)
-            }
-        }
+        applyHistoryItem(newItem)
 
         // Update last change count after processing
         self.lastChangeCount = pasteboard.changeCount
@@ -979,6 +940,34 @@ class ClipboardMonitor: ObservableObject {
         promoteToCurrent(item)
         logger.info("Copied one format from history item")
         return true
+    }
+
+    /// Applies a capture to history. Pasteboard capture and tests share this path.
+    func applyHistoryItem(_ newItem: ClipboardHistoryItem, persist: Bool = true) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !newItem.contents.isEmpty else { return }
+
+        if let existingItem = history.first(where: {
+            $0.containsRepresentations(from: newItem.contents)
+        }) {
+            let promoted = ClipboardHistoryState.promoting(
+                existingItem, in: history, at: newItem.timestamp)
+            history = promoted.history
+            markCurrent(promoted.item)
+            if persist {
+                persistenceManager.promoteHistoryItem(existingItem, to: promoted.item.timestamp)
+            }
+            logger.info("Duplicate item detected - moved existing to top")
+        } else {
+            history.insert(newItem, at: 0)
+            markCurrent(newItem)
+            if persist { persistenceManager.saveHistoryItem(newItem) }
+        }
+
+        if history.count > 100 {
+            history = Array(history.prefix(100))
+            if persist { persistenceManager.limitHistorySize(to: 100) }
+        }
     }
 
     /// Copies one content group without recording the app's own write.
