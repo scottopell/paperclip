@@ -112,19 +112,27 @@ enum Utilities {
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
-        guard item.contents.contains(where: { !$0.formats.isEmpty }) else { return false }
-        pasteboard.clearContents()
-
-        var copiedAnyContent = false
+        let staged = NSPasteboardItem()
+        var representations: [NSPasteboard.PasteboardType: Data] = [:]
         for content in item.contents {
             for format in content.formats {
-                copiedAnyContent = pasteboard.setData(
-                    content.data,
-                    forType: NSPasteboard.PasteboardType(format.uti)
-                ) || copiedAnyContent
+                let type = NSPasteboard.PasteboardType(format.uti)
+                // One pasteboard item cannot hold two different values for the same type.
+                guard representations[type] == nil || representations[type] == content.data else {
+                    return false
+                }
+                representations[type] = content.data
+                guard staged.setData(content.data, forType: type) else { return false }
             }
         }
-        return copiedAnyContent
+        guard !representations.isEmpty else { return false }
+
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([staged]) else { return false }
+        // A partial write must not be reported as a successful restore.
+        return representations.allSatisfy { entry in
+            pasteboard.data(forType: entry.key) == entry.value
+        }
     }
 
     @discardableResult
@@ -132,11 +140,20 @@ enum Utilities {
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general
     ) -> Bool {
-        guard let text = item.contents.lazy.compactMap({ $0.searchableText() }).first else {
-            return false
-        }
+        guard let text = plainText(from: item) else { return false }
         pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
+    }
+
+    static func plainText(from item: ClipboardHistoryItem) -> String? {
+        // Prefer an actual text representation, even when HTML or RTF appears first.
+        // Importing HTML through AppKit can synchronously block the UI thread.
+        let plainText = item.contents.first(where: { content in
+            content.formats.contains { format in
+                format.uti == "public.utf8-plain-text" || format.uti == "public.plain-text"
+            }
+        })?.searchableText()
+        return plainText ?? item.contents.lazy.compactMap({ $0.searchableText() }).first
     }
 
     @discardableResult

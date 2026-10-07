@@ -8,49 +8,59 @@
 import SwiftUI
 import PDFKit
 
-// MARK: - Views
+/// PDFKit provides the zoom and pan gestures for image previews.
+struct PDFImageView: View {
+    let data: Data
+    let contentID: UUID
 
-/// PDFImageView leverages PDFKit as an overpowered image viewer
-// The main reasons for this are the built-in handling of zoom/pan gestures
-// Overall highly recommend, but there are some un-addressed PDFKit warnings
-// that mean I may not be using the APIs entirely correctly, but :shrug:
-struct PDFImageView: NSViewRepresentable {
-    let image: NSImage
-    @State private var document: PDFDocument? = nil
+    @State private var loadedDocument: (id: UUID, document: PDFDocument)?
+    @State private var failedContentID: UUID?
 
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
-
-        // Configure the view
-        view.autoScales = true
-        view.displayMode = .singlePage
-        view.displayDirection = .vertical
-
-        // Start the document creation process
-        createDocumentAsync()
-
-        return view
-    }
-
-    func updateNSView(_ nsView: PDFView, context: Context) {
-        // Apply document when it becomes available
-        if let doc = document {
-            nsView.document = doc
+    var body: some View {
+        Group {
+            if failedContentID == contentID {
+                Text("Unable to preview image")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                DocumentView(document: loadedDocument?.id == contentID ? loadedDocument?.document : nil)
+            }
+        }
+        .task(id: contentID) {
+            loadedDocument = nil
+            failedContentID = nil
+            let imageData = data
+            let document = await Task.detached(priority: .userInitiated) { () -> PDFDocument? in
+                guard let image = NSImage(data: imageData),
+                    let page = PDFPage(image: image)
+                else { return nil }
+                let document = PDFDocument()
+                document.insert(page, at: 0)
+                return document
+            }.value
+            guard !Task.isCancelled else { return }
+            if let document {
+                loadedDocument = (contentID, document)
+            } else {
+                failedContentID = contentID
+            }
         }
     }
 
-    private func createDocumentAsync() {
-        // Use background QoS to avoid priority inversion
-        DispatchQueue.global(qos: .background).async {
-            let doc = PDFDocument()
-            if let page = PDFPage(image: image) {
-                doc.insert(page, at: 0)
-            }
+    private struct DocumentView: NSViewRepresentable {
+        let document: PDFDocument?
 
-            DispatchQueue.main.async {
-                self.document = doc
-                // No need for updateNSView to be called explicitly -
-                // SwiftUI will call it when the @State variable changes
+        func makeNSView(context: Context) -> PDFView {
+            let view = PDFView()
+            view.autoScales = true
+            view.displayMode = .singlePage
+            view.displayDirection = .vertical
+            return view
+        }
+
+        func updateNSView(_ view: PDFView, context: Context) {
+            if view.document !== document {
+                view.document = document
             }
         }
     }

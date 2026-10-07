@@ -70,6 +70,8 @@ final class QuickSearchManager: NSObject, ObservableObject, NSWindowDelegate {
         pasteTarget = isPaperclip(frontmostApplication)
             ? lastExternalApplication
             : frontmostApplication
+        // Request reconciliation, but never wait here for a promised pasteboard type.
+        // History publication refreshes the visible results when the snapshot completes.
         monitor.reconcileCurrentPasteboard()
 
         let panel = window ?? makePanel(monitor: monitor)

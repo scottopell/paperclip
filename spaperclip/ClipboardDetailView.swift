@@ -13,6 +13,7 @@ struct ClipboardDetailView: View {
     // A clipboard item may contain distinct data representations, such as TIFF and PNG.
     @State private var selectedContent: ClipboardContent?
     @State private var copyFeedback: CopyFeedback?
+    @State private var sourceIcon: (bundleIdentifier: String, image: NSImage)?
 
     private enum CopyFeedback {
         case copied
@@ -51,7 +52,10 @@ struct ClipboardDetailView: View {
                         Spacer().frame(width: 8)
 
                         HStack {
-                            if let nsImage = sourceApp.applicationIcon {
+                            if let bundleID = sourceApp.bundleIdentifier,
+                                sourceIcon?.bundleIdentifier == bundleID,
+                                let nsImage = sourceIcon?.image
+                            {
                                 Image(nsImage: nsImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
@@ -121,8 +125,10 @@ struct ClipboardDetailView: View {
                     }
 
                     // Content view
-                    if let selectedContent = selectedContent {
-                        contentView(for: selectedContent)
+                    if let selectedContent = selectedContent,
+                        let currentContent = item.contents.first(where: { $0.id == selectedContent.id })
+                    {
+                        contentView(for: currentContent)
                     } else {
                         Text("No content selected")
                             .foregroundColor(.secondary)
@@ -135,9 +141,18 @@ struct ClipboardDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: monitor.selectedHistoryItem) { oldItem, newItem in
-                updateSelectionForItem(newItem)
+            .onChange(of: monitor.selectedHistoryItem?.id) { _, _ in
+                updateSelectionForItem(monitor.selectedHistoryItem)
                 copyFeedback = nil
+            }
+            .task(id: item.sourceApplication?.bundleIdentifier) {
+                sourceIcon = nil
+                guard let bundleID = item.sourceApplication?.bundleIdentifier else { return }
+                let icon = await Task.detached(priority: .userInitiated) {
+                    SourceApplicationIconCache.shared.icon(for: bundleID)
+                }.value
+                guard !Task.isCancelled else { return }
+                if let icon { sourceIcon = (bundleID, icon) }
             }
             .onAppear {
                 updateSelectionForItem(item)
@@ -165,11 +180,11 @@ struct ClipboardDetailView: View {
             return
         }
 
-        // If current content is in the new history item, keep it selected
+        // Retain the chosen representation, but use the new item's content value.
         if let currentContent = selectedContent,
-            item.contents.contains(where: { $0.id == currentContent.id })
+            let matchingContent = item.contents.first(where: { $0.id == currentContent.id })
         {
-            // Content is still valid, keep it selected
+            selectedContent = matchingContent
         } else {
             // Default to text content if available, otherwise first content
             if let textContent = item.contents.first(where: { $0.canRenderAsText }) {
@@ -208,8 +223,8 @@ struct ClipboardDetailView: View {
                     // This handles massive text content much more efficiently
                     LazyTextView(content: content, isEditable: false)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if content.canRenderAsImage, let nsImage = NSImage(data: content.data) {
-                    PDFImageView(image: nsImage)
+                } else if content.canRenderAsImage {
+                    PDFImageView(data: content.data, contentID: content.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack {
@@ -258,7 +273,10 @@ struct ClipboardDetailView: View {
                         }
 
                         HStack(spacing: 12) {
-                            if let icon = sourceApp.applicationIcon {
+                            if let bundleID = sourceApp.bundleIdentifier,
+                                sourceIcon?.bundleIdentifier == bundleID,
+                                let icon = sourceIcon?.image
+                            {
                                 Image(nsImage: icon)
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
