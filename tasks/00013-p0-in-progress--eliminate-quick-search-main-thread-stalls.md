@@ -1,0 +1,30 @@
+# Eliminate Quick Search main-thread stalls
+
+## Problem and evidence
+
+The supplied macOS sample (Paperclip 1.0.1 build 17) shows the main thread stuck in `QuickSearchView.applyQuery` → `QuickSearchQuery.results` → HTML `NSAttributedString` conversion → synchronous XPC reply. CPU usage is unknown. Code review found other *possible* blocking paths; do not claim they occurred in this sample. Protect invoke → type → choose → return without changing captured clipboard bytes or restore fidelity.
+
+## Test first: reproduce and measure
+
+1. Run existing tests and record the test environment. Add focused failing tests before each fix. Use a watchdog or a separate test process for pathological inputs so a regression cannot hang the whole suite. Record raw cold and warm query-to-result times, main-thread responsiveness, and ordered result IDs; do not rely on warmed matcher-only medians.
+2. Reproduce the quadratic matcher with one ~99,999-byte `a` entry and query `ab`, plus a long repeated-prefix contiguous miss. Verify short-string fuzzy rank and tie/recency rules still hold. Test distinct successive queries against 100 large plain-text entries and cold/evicted caches. Keep performance thresholds realistic for the test machine, and compare before/after samples.
+3. Reproduce rich-text conversion as an integration test using a small valid HTML clipboard item, if local macOS behavior permits; show that the caller can return to the run loop while conversion is delayed (use a controlled converter seam where possible). Test invalid HTML/RTF and cache misses. A macOS HTML helper hang cannot be reliably forced by a pure unit test; document a manual sample-based check instead of relying on sleeps or treating a fast conversion as proof.
+4. Test capture with a delayed pasteboard provider (if reliably automatable), multiple/large formats, and a change while capture is in flight. Check opening/typing responsiveness, final history order, and exact representation bytes. Test cold image/icon selection and Enter/Shift-Enter separately. Where an OS service cannot be driven deterministically, add a manual acceptance check, not a flaky timing assertion.
+
+## Fix in priority order
+
+1. **Search:** make worst-case fuzzy and contiguous matching bounded/linear in the length of a clipboard entry for practical queries, while preserving existing rank/order rules where feasible. Move cold decode/search work that cannot meet the interaction budget away from the main thread; discard stale query results, keep selection consistent with the displayed result set, and do not turn search into a fixed debounce. The UI must still accept the next key, Escape, and navigation while work runs.
+2. **Rich content and cache:** do not invoke HTML/RTF attributed-string conversion synchronously from Quick Search, history filtering, or the Shift-Enter key handler. Run expensive conversion separately from main-thread updates with a clear pending/failure state; do not silently treat an unindexed entry as a definitive non-match or paste unintended text. Avoid holding `ClipboardSearchTextCache.textLock` across expensive decode, and cache failures or limit retry frequency so a bad entry does not repeatedly block. Bound concurrent work and memory; a stuck conversion must not prevent plain-text searches. Leave raw clipboard representations untouched and make any plain-text transformation explicit.
+3. **Capture/open:** prevent a changed pasteboard's `data(forType:)`, whole-blob grouping/comparison, and large description decode from blocking panel presentation or a visible panel's keyboard path. Keep AppKit/pasteboard access under an explicit owner; snapshot/order results against `changeCount` so delayed captures cannot overwrite newer ones. Preserve every successfully captured type and exact data. If a promised pasteboard provider never responds, state the limit of what Paperclip can guarantee; do not silently report successful capture.
+4. **Preview/selection:** move expensive image creation and source-icon misses out of SwiftUI's render path where measured or reproduced. Use placeholder/cancellable, identity-checked results so rapid selection changes cannot display the wrong item; keep large-text assignment responsive if measured to stall. Do not add speculative preview infrastructure where no regression is found.
+5. **Restore:** measure all-representation writes and Shift-Enter conversion; retain exact-format Enter behavior and explicit failure on a failed write. If writing itself blocks the UI, change the flow only with a safe guarantee that the pasteboard is ready before hiding/posting paste; never show success or auto-paste on partial failure. Keep persistence work off the interaction path.
+
+## Acceptance
+
+- The supplied HTML-stall path is absent from the main-thread typing stack. Cold searches and the pathological matcher cases cannot pin the Quick Search event loop. Opening on a changed clipboard and selecting large content remain keyboard-responsive in focused manual/integration checks.
+- Exact captured representations, search semantics (including rich-text matches once ready), result order, selection, Escape, Enter, and Shift-Enter remain correct. Pending indexing/capture never masquerades as a completed negative result; stale work cannot change a later session.
+- Red tests for reproducible paths become green; existing unit and Quick Search UI journeys pass. Record raw before/after timings and sample the production UI path. Clearly list any macOS-provider or XPC hang that cannot be bounded in-process and the manual check used instead. Do not claim all possible system hangs are eliminated.
+
+## Scope control
+
+Start with the demonstrated HTML wait and independently reproducible matcher. Apply each later change only to a measured or deterministically reproduced blocker; report unconfirmed risks rather than building broad concurrency machinery in advance. This is a Quick Search reliability task, not a new indexing/search product or a clipboard data migration.
