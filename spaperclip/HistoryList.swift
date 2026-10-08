@@ -295,6 +295,30 @@ final class HistoryFilterWorker: @unchecked Sendable {
     }
 }
 
+struct HistoryPlainRestoreState {
+    private(set) var pendingID: UUID?
+    private(set) var itemID: UUID?
+    var isPending: Bool { pendingID != nil }
+
+    mutating func begin(for itemID: UUID) -> UUID {
+        let id = UUID()
+        pendingID = id
+        self.itemID = itemID
+        return id
+    }
+
+    mutating func cancel() {
+        pendingID = nil
+        itemID = nil
+    }
+
+    mutating func finish(_ id: UUID) -> Bool {
+        guard pendingID == id else { return false }
+        cancel()
+        return true
+    }
+}
+
 @available(macOS 14.0, *)
 struct HistoryListView: View {
     @ObservedObject var monitor: ClipboardMonitor
@@ -308,7 +332,7 @@ struct HistoryListView: View {
     @State private var queryGeneration = 0
     @State private var searchTask: Task<Void, Never>?
     @State private var plainRestoreTask: Task<Void, Never>?
-    @State private var plainRestorePending = false
+    @State private var plainRestore = HistoryPlainRestoreState()
     @State private var restoreError: String?
     @State private var richIndex: [UUID: String] = [:]
     @State private var richIndexed: Set<UUID> = []
@@ -339,7 +363,7 @@ struct HistoryListView: View {
         guard isVisible, filteredHistoryOverride == nil, !queryIsDebouncing else { return }
         searchTask?.cancel()
         plainRestoreTask?.cancel()
-        plainRestorePending = false
+        plainRestore.cancel()
         restoreError = nil
         let ticket = filterWorker.invalidate()
         queryGeneration &+= 1
@@ -432,6 +456,11 @@ struct HistoryListView: View {
 
     // Select a specific item directly using monitor
     private func selectItem(_ item: ClipboardHistoryItem) {
+        if selectedItem?.id != item.id {
+            plainRestoreTask?.cancel()
+            plainRestore.cancel()
+            restoreError = nil
+        }
         monitor.selectHistoryItem(item)
     }
 
@@ -453,7 +482,7 @@ struct HistoryListView: View {
                         onSearchTextChanged: { newText in
                             searchTask?.cancel()
                             plainRestoreTask?.cancel()
-                            plainRestorePending = false
+                            plainRestore.cancel()
                             restoreError = nil
                             _ = filterWorker.invalidate()
                             queryGeneration &+= 1
@@ -477,7 +506,7 @@ struct HistoryListView: View {
                     .foregroundColor(.secondary)
             }
 
-            if plainRestorePending || restoreError != nil {
+            if plainRestore.isPending || restoreError != nil {
                 Text(restoreError ?? "Preparing plain text…")
                     .font(.caption)
                     .foregroundColor(restoreError == nil ? Color.secondary : Color.orange)
@@ -523,7 +552,7 @@ struct HistoryListView: View {
                                 )
                                 .cornerRadius(4)
                                 .onTapGesture {
-                                    monitor.selectHistoryItem(item)
+                                    selectItem(item)
                                 }
                         }
                     }
@@ -554,7 +583,15 @@ struct HistoryListView: View {
             isVisible = false
             searchTask?.cancel()
             plainRestoreTask?.cancel()
+            plainRestore.cancel()
             _ = filterWorker.invalidate()
+        }
+        .onChange(of: monitor.selectedHistoryItem?.id) { _, newID in
+            if plainRestore.isPending && plainRestore.itemID != newID {
+                plainRestoreTask?.cancel()
+                plainRestore.cancel()
+                restoreError = nil
+            }
         }
         .onChange(of: monitor.history) { _, _ in applyQuery(preserveSelection: true) }
         .onChange(of: externalSearchText) { _, _ in applyQuery() }
@@ -589,7 +626,7 @@ struct HistoryListView: View {
         }
 
         if NSEvent.modifierFlags.contains(.shift) {
-            guard !plainRestorePending else { return .handled }
+            guard !plainRestore.isPending else { return .handled }
             if let plain = item.contents.first(where: { content in
                 content.formats.contains(where: {
                     $0.uti == "public.utf8-plain-text" || $0.uti == "public.plain-text"
@@ -601,19 +638,28 @@ struct HistoryListView: View {
             }
             let query = effectiveSearchText
             let generation = queryGeneration
-            plainRestorePending = true
+            let clipboardChangeCount = NSPasteboard.general.changeCount
+            let restoreID = plainRestore.begin(for: item.id)
             restoreError = nil
             plainRestoreTask = Task {
                 let text = await PlainRestoreWorker.text(from: item)
+                guard plainRestore.finish(restoreID) else { return }
                 guard !Task.isCancelled, isVisible, generation == queryGeneration,
                       query == effectiveSearchText,
                       monitor.selectedHistoryItem?.id == item.id else { return }
-                plainRestorePending = false
                 guard let text else {
                     restoreError = "This item has no plain-text representation."
                     return
                 }
                 let board = NSPasteboard.general
+                guard ClipboardRestorePrecondition.isSafe(to: board,
+                    expectedChangeCount: clipboardChangeCount,
+                    capturePending: monitor.isCapturingHistory,
+                    captureIncomplete: monitor.captureIncomplete) else {
+                    monitor.reconcileCurrentPasteboard()
+                    restoreError = "Clipboard changed while preparing plain text. Try again."
+                    return
+                }
                 board.clearContents()
                 guard board.setString(text, forType: .string) else {
                     restoreError = "Plain text could not be written to the clipboard."
@@ -622,10 +668,15 @@ struct HistoryListView: View {
                 monitor.promoteRestoredItem(item)
                 onItemCopied()
             }
-        } else if monitor.copyAllContentTypes(item) {
-            onItemCopied()
         } else {
-            restoreError = "This item could not be written to the clipboard."
+            plainRestoreTask?.cancel()
+            plainRestore.cancel()
+            if monitor.copyAllContentTypes(item) {
+                restoreError = nil
+                onItemCopied()
+            } else {
+                restoreError = "This item could not be written to the clipboard."
+            }
         }
         return .handled
     }

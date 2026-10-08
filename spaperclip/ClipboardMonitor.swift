@@ -847,13 +847,18 @@ class ClipboardMonitor: ObservableObject {
     /// Schedules a read without making the polling timer or Quick Search wait for a data provider.
     func reconcileCurrentPasteboard(force: Bool = false) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard initialStartupComplete, !captureInFlight else { return }
+        guard initialStartupComplete else { return }
         let pasteboard = self.pasteboard
-        guard force || pasteboard.changeCount != lastChangeCount || captureIncomplete else { return }
+        let changed = pasteboard.changeCount != lastChangeCount
+        if changed {
+            // The old Current marker no longer describes the pasteboard. Keep browsing selection.
+            currentItem = nil
+            currentItemID = nil
+        }
+        guard !captureInFlight, force || changed else { return }
         let knownTypes = self.knownTypes
         let generation = captureGeneration
         let lastCount = lastChangeCount
-        let retryIncomplete = captureIncomplete
         let sourceApp = NSWorkspace.shared.frontmostApplication.map {
             SourceApplicationInfo(bundleIdentifier: $0.bundleIdentifier, applicationName: $0.localizedName)
         }
@@ -861,7 +866,7 @@ class ClipboardMonitor: ObservableObject {
         isCapturingHistory = true
         captureQueue.async { [weak self] in
             let startCount = pasteboard.changeCount
-            let captured: ClipboardHistoryItem? = (force || startCount != lastCount || retryIncomplete)
+            let captured: ClipboardHistoryItem? = (force || startCount != lastCount)
                 ? Self.updateFromClipboard(pasteboard: pasteboard, knownTypes: knownTypes,
                                            sourceAppInfo: sourceApp)
                 : nil
@@ -874,19 +879,19 @@ class ClipboardMonitor: ObservableObject {
                 guard self.captureGeneration == generation else { return }
                 // Do not publish a mixed snapshot, a superseded capture, or our own write.
                 guard startCount == endCount, self.pasteboard.changeCount == endCount else {
+                    self.currentItem = nil
+                    self.currentItemID = nil
                     self.reconcileCurrentPasteboard()
                     return
                 }
-                guard force || endCount != self.lastChangeCount || self.captureIncomplete else { return }
+                guard force || endCount != self.lastChangeCount else { return }
                 guard let captured else {
-                    if hasAdvertisedTypes {
-                        // An advertised representation could not be read. Do not save
-                        // a partial item or let Quick Search silently restore older data.
-                        self.captureIncomplete = true
-                    } else {
-                        self.lastChangeCount = endCount // Empty pasteboard is not a failure.
-                        self.captureIncomplete = false
-                    }
+                    // Whether empty or incomplete, no saved item is current. Consume this
+                    // change count so a failed provider is not read again on every poll.
+                    self.currentItem = nil
+                    self.currentItemID = nil
+                    self.lastChangeCount = endCount
+                    self.captureIncomplete = hasAdvertisedTypes
                     return
                 }
                 self.captureIncomplete = false

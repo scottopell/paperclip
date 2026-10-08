@@ -111,6 +111,91 @@ final class PasteboardProviderDelayTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedSnapshotDoesNotPollAgainButForceRetriesAndNewWriteCaptures() async {
+        let board = NSPasteboard(name: .init(UUID().uuidString))
+        defer { board.releaseGlobally() }
+        let type = NSPasteboard.PasteboardType("com.example.unreadable")
+        let monitor = ClipboardMonitor(loadPersistedHistory: false, pasteboard: board)
+        let previous = ClipboardHistoryItem(timestamp: Date(), contents: [
+            ClipboardContent(data: Data("previous".utf8),
+                             formats: [ClipboardFormat(uti: type.rawValue)], description: "previous")
+        ], sourceApplication: nil)
+        monitor.applyHistoryItem(previous, persist: false)
+        let initialCount = board.changeCount
+        board.clearContents()
+        let provider = CountingMissingProvider()
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setDataProvider(provider, forTypes: [type]))
+        XCTAssertTrue(board.writeObjects([item]))
+        XCTAssertNotEqual(board.changeCount, initialCount)
+        monitor.reconcileCurrentPasteboard()
+        let failed = expectation(for: NSPredicate { _, _ in monitor.captureIncomplete },
+                                 evaluatedWith: nil)
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertNil(monitor.currentItem)
+        XCTAssertNil(monitor.currentItemID)
+        XCTAssertEqual(monitor.selectedHistoryItem?.id, previous.id)
+        XCTAssertEqual(monitor.history.count, 1)
+        let callsAfterFailure = provider.calls
+        for _ in 0..<3 { monitor.reconcileCurrentPasteboard() } // Poll unchanged snapshot.
+        XCTAssertEqual(provider.calls, callsAfterFailure, "unchanged failed snapshot must not be retried")
+        XCTAssertFalse(monitor.isCapturingHistory)
+
+        // AppKit may cache a missing promised representation. Force still schedules one
+        // explicit read, but cannot make that provider produce bytes on the same write.
+        monitor.reconcileCurrentPasteboard(force: true)
+        XCTAssertTrue(monitor.isCapturingHistory)
+        let retried = expectation(for: NSPredicate { _, _ in !monitor.isCapturingHistory },
+                                  evaluatedWith: nil)
+        await fulfillment(of: [retried], timeout: 5)
+        XCTAssertTrue(monitor.captureIncomplete)
+        XCTAssertNil(monitor.currentItemID)
+        XCTAssertEqual(monitor.history.count, 1)
+
+        let latest = Data([23, 0, 254])
+        board.clearContents()
+        XCTAssertTrue(board.setData(latest, forType: type))
+        monitor.reconcileCurrentPasteboard()
+        XCTAssertNil(monitor.currentItemID)
+        let published = expectation(for: NSPredicate { _, _ in monitor.currentItem?.contents.first?.data == latest },
+                                    evaluatedWith: nil)
+        await fulfillment(of: [published], timeout: 5)
+        XCTAssertEqual(monitor.currentItemID, monitor.history.first?.id)
+    }
+
+    @MainActor
+    func testChangedClipboardClearsCurrentButKeepsBrowsingSelectionWhileProviderBlocks() async {
+        let board = NSPasteboard(name: .init(UUID().uuidString))
+        defer { board.releaseGlobally() }
+        let type = NSPasteboard.PasteboardType("public.utf8-plain-text")
+        let monitor = ClipboardMonitor(loadPersistedHistory: false, pasteboard: board)
+        let previous = ClipboardHistoryItem(timestamp: Date(), contents: [
+            ClipboardContent(data: Data("previous".utf8),
+                             formats: [ClipboardFormat(uti: type.rawValue)], description: "previous")
+        ], sourceApplication: nil)
+        monitor.applyHistoryItem(previous, persist: false)
+        let initialCount = board.changeCount
+        board.clearContents()
+        let began = expectation(description: "provider invoked")
+        let gate = DispatchSemaphore(value: 0)
+        let provider = BlockingProvider(began: began, gate: gate)
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setDataProvider(provider, forTypes: [type]))
+        XCTAssertTrue(board.writeObjects([item]))
+        XCTAssertNotEqual(board.changeCount, initialCount)
+        monitor.reconcileCurrentPasteboard()
+        XCTAssertNil(monitor.currentItem, "old item is no longer on the pasteboard")
+        XCTAssertNil(monitor.currentItemID)
+        XCTAssertEqual(monitor.selectedHistoryItem?.id, previous.id)
+        await fulfillment(of: [began], timeout: 3)
+        gate.signal()
+        let published = expectation(for: NSPredicate { _, _ in monitor.currentItem != nil },
+                                    evaluatedWith: nil)
+        await fulfillment(of: [published], timeout: 5)
+        XCTAssertEqual(monitor.currentItem?.contents.first?.data, Data("stale bytes".utf8))
+    }
+
+    @MainActor
     func testClearHistoryInvalidatesInFlightCaptureEvenWhenHistoryIsEmpty() async {
         let board = NSPasteboard(name: .init(UUID().uuidString))
         defer { board.releaseGlobally() }
@@ -131,6 +216,15 @@ final class PasteboardProviderDelayTests: XCTestCase {
         monitor.reconcileCurrentPasteboard()
         XCTAssertTrue(monitor.history.isEmpty)
         XCTAssertFalse(monitor.isCapturingHistory)
+    }
+
+    private final class CountingMissingProvider: NSObject, NSPasteboardItemDataProvider {
+        private(set) var calls = 0
+
+        func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+                        provideDataForType type: NSPasteboard.PasteboardType) {
+            calls += 1
+        }
     }
 
     private final class MissingProvider: NSObject, NSPasteboardItemDataProvider {

@@ -46,3 +46,7 @@ Start with the demonstrated HTML wait and independently reproducible matcher. Ap
 4. Profile the **installed production** app while repeating the originally failing query. Confirm the main-thread HTML/XPC stack is gone and measure typing-to-paint, image selection, and all-types restore. If an OS provider never responds, its background capture/import can remain pending; Paperclip cannot make that OS helper return.
 
 Keep task in progress until the manual checks and production-path sample pass. Do not report all possible OS-level stalls eliminated.
+
+## PR review iteration
+
+Codex's first pass on PR #19 found six follow-up issues. The follow-up commit bounds decoded rich-text matching, resumes indexing after an obsolete rich item completes, clears only the matching pending plain-text restore on selection changes, stops automatic retries of an unchanged failed capture, clears the stale Current marker after failed/new captures, and rechecks pasteboard change count before finishing asynchronous plain-text restore. Focused regression tests cover the matcher bound, restore precondition, failed-capture polling, and pending restore state. Re-run the full unit target and Release build; the installed-app checks above remain open.

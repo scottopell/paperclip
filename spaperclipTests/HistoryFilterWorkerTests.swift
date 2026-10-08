@@ -42,6 +42,35 @@ final class HistoryFilterWorkerTests: XCTestCase {
         XCTAssertTrue(discarded.isEmpty)
     }
 
+    func testCancelledPlainRestoreCannotLeavePendingOrFinishAReplacement() {
+        var restore = HistoryPlainRestoreState()
+        let firstItem = UUID()
+        let secondItem = UUID()
+        let first = restore.begin(for: firstItem)
+        XCTAssertTrue(restore.isPending)
+        XCTAssertEqual(restore.itemID, firstItem)
+
+        // Selection changed while the first worker was still decoding.
+        restore.cancel()
+        XCTAssertFalse(restore.isPending)
+        let second = restore.begin(for: secondItem)
+        XCTAssertFalse(restore.finish(first))
+        XCTAssertTrue(restore.isPending)
+        XCTAssertEqual(restore.pendingID, second)
+        XCTAssertEqual(restore.itemID, secondItem)
+        XCTAssertTrue(restore.finish(second))
+        XCTAssertFalse(restore.isPending)
+        XCTAssertNil(restore.itemID)
+    }
+
+    func testOldPlainRestoreCannotFinishAfterRichRestoreCancelsIt() {
+        var restore = HistoryPlainRestoreState()
+        let first = restore.begin(for: UUID())
+        restore.cancel() // Return chose a full-fidelity restore instead.
+        XCTAssertFalse(restore.finish(first))
+        XCTAssertFalse(restore.isPending)
+    }
+
     func testSynchronousHistoryFilterCanWaitOnAnInFlightRichImport() {
         let rich = item("<b>needle</b>", uti: "public.html")
         let cache = ClipboardSearchTextCache(totalCostLimit: 1024)

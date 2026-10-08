@@ -32,6 +32,15 @@ enum QuickSearchQuery {
             let ranks = item.contents.compactMap { content -> MatchRank? in
                 if content.decodesRichSearchText, let indexedRichText {
                     guard let text = indexedRichText[content.id] else { return nil }
+                    // A small HTML document can expand into a very large plain-text
+                    // value. Bound matching by decoded size, not only source bytes.
+                    if content.data.count >= 100_000 || text.utf8.count >= 100_000 {
+                        guard text.localizedCaseInsensitiveContains(normalizedQuery) else {
+                            return nil
+                        }
+                        return MatchRank(matchKind: 2, wordStarts: 0,
+                                         span: normalizedQuery.count, gaps: 0, start: 0)
+                    }
                     return rank(text: text, query: normalizedQuery)
                 }
                 // Preserve detailed fuzzy ranking for normal clipboard values. Building
@@ -436,6 +445,13 @@ enum QuickSearchWorker {
     }
 }
 
+enum ClipboardRestorePrecondition {
+    static func isSafe(to pasteboard: NSPasteboard, expectedChangeCount: Int,
+                       capturePending: Bool, captureIncomplete: Bool) -> Bool {
+        pasteboard.changeCount == expectedChangeCount && !capturePending && !captureIncomplete
+    }
+}
+
 enum PlainRestoreWorker {
     static let queue = DispatchQueue(label: "com.scottopell.spaperclip.plain-restore", qos: .userInitiated)
 
@@ -649,7 +665,14 @@ struct QuickSearchView: View {
                 richIndexing.remove(content.id)
                 guard monitor.history.contains(where: {
                     $0.contents.contains(where: { $0.id == content.id })
-                }) else { return }
+                }) else {
+                    // The removed item no longer holds the only indexing slot.
+                    // Start work on any rich item captured while it was blocked.
+                    if manager.isQuickSearchVisible {
+                        applyQuery(searchText, preserveSelection: true)
+                    }
+                    return
+                }
                 richIndexed.insert(content.id)
                 if let text { richIndex[content.id] = text }
                 if manager.isQuickSearchVisible { applyQuery(searchText, preserveSelection: true) }
@@ -736,6 +759,7 @@ struct QuickSearchView: View {
             guard !isPreparingPlainText else { return .handled }
             let session = manager.presentationID
             let query = searchText
+            let clipboardChangeCount = NSPasteboard.general.changeCount
             restoreGeneration &+= 1
             let generation = restoreGeneration
             isPreparingPlainText = true
@@ -752,6 +776,14 @@ struct QuickSearchView: View {
                     return
                 }
                 let board = NSPasteboard.general
+                guard ClipboardRestorePrecondition.isSafe(to: board,
+                    expectedChangeCount: clipboardChangeCount,
+                    capturePending: monitor.isCapturingHistory,
+                    captureIncomplete: monitor.captureIncomplete) else {
+                    monitor.reconcileCurrentPasteboard()
+                    restoreError = "Clipboard changed while preparing plain text. Try again."
+                    return
+                }
                 board.clearContents()
                 guard board.setString(text, forType: .string) else {
                     restoreError = "Plain text could not be written to the clipboard."

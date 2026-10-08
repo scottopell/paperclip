@@ -148,6 +148,36 @@ final class QuickSearchPerformanceTests: XCTestCase {
         }
     }
 
+    func testIndexedRichTextOverSizeBoundUsesContiguousMatchWithoutFuzzyRanking() {
+        let content = ClipboardContent(data: Data("<p>small</p>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "rich")
+        let item = ClipboardHistoryItem(timestamp: .now, contents: [content], sourceApplication: nil)
+        let text = String(repeating: "a", count: 120_000) + "-b"
+        XCTAssertEqual(QuickSearchQuery.results(in: [item], matching: "ab",
+            indexedRichText: [content.id: text]).count, 0)
+        XCTAssertEqual(QuickSearchQuery.results(in: [item], matching: "a-b",
+            indexedRichText: [content.id: text]).map(\.id), [item.id])
+    }
+
+    func testAsyncRestoreRequiresTheSamePasteboardChangeCount() {
+        let board = NSPasteboard(name: .init("spaperclip-restore-test-\(UUID())"))
+        defer { board.releaseGlobally() }
+        board.clearContents()
+        XCTAssertTrue(board.setString("before", forType: .string))
+        let count = board.changeCount
+        XCTAssertTrue(ClipboardRestorePrecondition.isSafe(to: board,
+            expectedChangeCount: count, capturePending: false, captureIncomplete: false))
+        XCTAssertFalse(ClipboardRestorePrecondition.isSafe(to: board,
+            expectedChangeCount: count, capturePending: true, captureIncomplete: false))
+        XCTAssertFalse(ClipboardRestorePrecondition.isSafe(to: board,
+            expectedChangeCount: count, capturePending: false, captureIncomplete: true))
+        board.clearContents()
+        XCTAssertTrue(board.setString("new owner", forType: .string))
+        XCTAssertFalse(ClipboardRestorePrecondition.isSafe(to: board,
+            expectedChangeCount: count, capturePending: false, captureIncomplete: false))
+        XCTAssertEqual(board.string(forType: .string), "new owner")
+    }
+
     @MainActor
     func testSuccessiveColdLargeQueriesKeepMainActorResponsive() async {
         ClipboardSearchTextCache.shared.removeAll()
