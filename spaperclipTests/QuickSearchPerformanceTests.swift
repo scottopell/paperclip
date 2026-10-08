@@ -185,6 +185,21 @@ final class QuickSearchPerformanceTests: XCTestCase {
             activeItemID: second, selectedItemID: second))
     }
 
+    func testPlainRestoreSurvivesSameQueryRefreshWhileItsItemIsLive() {
+        let selected = UUID()
+        let newCapture = UUID()
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: selected, queryChanged: false, liveItemIDs: [selected]))
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: selected, queryChanged: false, liveItemIDs: [newCapture, selected]))
+        XCTAssertTrue(QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: selected, queryChanged: false, liveItemIDs: [newCapture]))
+        XCTAssertTrue(QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: selected, queryChanged: true, liveItemIDs: [selected]))
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: nil, queryChanged: true, liveItemIDs: []))
+    }
+
     func testAsyncRestoreRequiresTheSamePasteboardChangeCount() {
         let board = NSPasteboard(name: .init("spaperclip-restore-test-\(UUID())"))
         defer { board.releaseGlobally() }

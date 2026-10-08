@@ -62,3 +62,7 @@ Independent review also caught two behavior gaps: full History must not restore 
 ## Further reliability checks
 
 An independent pass found that preparatory work could outlive the initial clipboard ownership check. Each copy operation now rechecks the pasteboard change count immediately before clearing/writing it; failures reconcile without promoting history. Rich-text search has a separate serial lane from speculative row previews and full detail parsing, with shared in-flight results when appropriate. Offline HTML extraction normalizes block/inline whitespace and preserves `<pre>` content. HTML indexing still stops at 500 KB of source; local text extraction for preview or explicit plain-text transformation stops at 2 MB to bound DOM memory. Oversize HTML shows an explicit preview/conversion limit, while Enter still restores its original bytes. The full unit suite, arm64 Release build, and SwiftPM executable build pass after these changes. XCUITest launch and installed-app profiling remain pending.
+
+## Third Codex review
+
+Context-menu copy actions now report rejected writes in the row and accessibility value. A same-query index/history refresh no longer cancels a still-valid Shift-Return conversion; user query/selection changes, item removal, session change, and a new clipboard write still cancel or reject stale work. Focused state tests and the full unit target pass; arm64 Release build passes. Installed-app UI checks remain open.

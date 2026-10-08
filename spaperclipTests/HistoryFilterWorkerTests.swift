@@ -42,6 +42,20 @@ final class HistoryFilterWorkerTests: XCTestCase {
         XCTAssertTrue(discarded.isEmpty)
     }
 
+    func testIndexRefreshDoesNotCancelUnchangedPlainRestore() {
+        var restore = HistoryPlainRestoreState()
+        let selected = UUID()
+        let request = restore.begin(for: selected)
+        XCTAssertFalse(restore.invalidatesRefresh(queryChanged: false, liveItemIDs: [selected]))
+        XCTAssertTrue(restore.isPending)
+        XCTAssertTrue(restore.finish(request))
+        let changed = restore.begin(for: selected)
+        XCTAssertTrue(restore.invalidatesRefresh(queryChanged: true, liveItemIDs: [selected]))
+        XCTAssertTrue(restore.invalidatesRefresh(queryChanged: false, liveItemIDs: []))
+        restore.cancel()
+        XCTAssertFalse(restore.finish(changed))
+    }
+
     func testCancelledPlainRestoreCannotLeavePendingOrFinishAReplacement() {
         var restore = HistoryPlainRestoreState()
         let firstItem = UUID()

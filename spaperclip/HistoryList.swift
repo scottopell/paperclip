@@ -32,6 +32,7 @@ struct HistoryItemRow: View {
     @ObservedObject var monitor: ClipboardMonitor
     @State private var previewText: String = "(Loading...)"
     @State private var sourceIcon: NSImage?
+    @State private var copyError: String?
 
     var body: some View {
         contentCard
@@ -44,6 +45,7 @@ struct HistoryItemRow: View {
                     .frame(width: 1, height: 1)
                     .accessibilityElement()
                     .accessibilityLabel(accessibilitySummary)
+                    .accessibilityValue(copyError ?? "")
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAddTraits(
                         monitor.selectedHistoryItem?.id == item.id ? .isSelected : []
@@ -52,6 +54,7 @@ struct HistoryItemRow: View {
             }
             .task(id: item.id) {
                 previewText = "(Loading...)"
+                copyError = nil
                 for content in item.contents {
                     if let chunk = await ClipboardPreviewText.chunk(for: content, length: 100) {
                         guard !Task.isCancelled else { return }
@@ -97,6 +100,12 @@ struct HistoryItemRow: View {
                 .padding(.vertical, 2)
 
             contentPreview
+
+            if let copyError {
+                Label(copyError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
         .padding(8)
         .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
@@ -209,18 +218,22 @@ struct HistoryItemRow: View {
                 ForEach(item.contents) { content in
                     if content.formats.count == 1 {
                         Button("Copy \(content.formats[0].typeName)") {
-                            monitor.copyFormat(content.formats[0], from: content, in: item)
+                            reportCopyResult(
+                                monitor.copyFormat(content.formats[0], from: content, in: item)
+                            )
                         }
                     } else {
                         Menu(getContentMenuLabel(content)) {
                             ForEach(content.formats) { format in
                                 Button("Copy \(format.typeName)") {
-                                    monitor.copyFormat(format, from: content, in: item)
+                                    reportCopyResult(
+                                        monitor.copyFormat(format, from: content, in: item)
+                                    )
                                 }
                             }
                             Divider()
                             Button("Copy All Formats in Group") {
-                                monitor.copyContent(content, in: item)
+                                reportCopyResult(monitor.copyContent(content, in: item))
                             }
                         }
                     }
@@ -229,9 +242,21 @@ struct HistoryItemRow: View {
                 Divider()
 
                 Button("Copy All Content Types") {
-                    monitor.copyAllContentTypes(item)
+                    reportCopyResult(monitor.copyAllContentTypes(item))
                 }
             }
+        }
+    }
+
+    private func reportCopyResult(_ succeeded: Bool) {
+        if succeeded {
+            copyError = nil
+        } else if monitor.captureIncomplete {
+            copyError = "Clipboard capture failed. Copy again before using history."
+        } else if monitor.isCapturingHistory {
+            copyError = "Wait for clipboard capture before copying."
+        } else {
+            copyError = "This item could not be written to the clipboard."
         }
     }
 
@@ -314,6 +339,11 @@ struct HistoryPlainRestoreState {
         itemID = nil
     }
 
+    func invalidatesRefresh(queryChanged: Bool, liveItemIDs: Set<UUID>) -> Bool {
+        guard let itemID else { return false }
+        return queryChanged || !liveItemIDs.contains(itemID)
+    }
+
     mutating func finish(_ id: UUID) -> Bool {
         guard pendingID == id else { return false }
         cancel()
@@ -332,6 +362,7 @@ struct HistoryListView: View {
     @State private var searching = false
     @State private var pendingRichText = false
     @State private var queryGeneration = 0
+    @State private var lastAppliedQuery: String?
     @State private var searchTask: Task<Void, Never>?
     @State private var plainRestoreTask: Task<Void, Never>?
     @State private var plainRestore = HistoryPlainRestoreState()
@@ -363,15 +394,20 @@ struct HistoryListView: View {
 
     private func applyQuery(preserveSelection: Bool = false) {
         guard isVisible, filteredHistoryOverride == nil, !queryIsDebouncing else { return }
+        let history = monitor.history
+        let query = effectiveSearchText
+        let queryChanged = !preserveSelection || lastAppliedQuery != query
+        lastAppliedQuery = query
+        if plainRestore.invalidatesRefresh(queryChanged: queryChanged,
+                                           liveItemIDs: Set(history.map(\.id))) {
+            plainRestoreTask?.cancel()
+            plainRestore.cancel()
+        }
+        if !plainRestore.isPending { restoreError = nil }
         searchTask?.cancel()
-        plainRestoreTask?.cancel()
-        plainRestore.cancel()
-        restoreError = nil
         let ticket = filterWorker.invalidate()
         queryGeneration &+= 1
         let generation = queryGeneration
-        let history = monitor.history
-        let query = effectiveSearchText
         let liveIDs = Set(history.flatMap(\.contents).map(\.id))
         richIndex = richIndex.filter { liveIDs.contains($0.key) }
         richIndexed.formIntersection(liveIDs)
@@ -646,15 +682,13 @@ struct HistoryListView: View {
                 return .handled
             }
             let query = effectiveSearchText
-            let generation = queryGeneration
             let clipboardChangeCount = NSPasteboard.general.changeCount
             let restoreID = plainRestore.begin(for: item.id)
             restoreError = nil
             plainRestoreTask = Task {
                 let text = await PlainRestoreWorker.text(from: item)
                 guard plainRestore.finish(restoreID) else { return }
-                guard !Task.isCancelled, isVisible, generation == queryGeneration,
-                      query == effectiveSearchText,
+                guard !Task.isCancelled, isVisible, query == effectiveSearchText,
                       monitor.selectedHistoryItem?.id == item.id else { return }
                 guard let text else {
                     restoreError = item.contents.contains(where: {

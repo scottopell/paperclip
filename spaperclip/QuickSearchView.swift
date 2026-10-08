@@ -624,6 +624,12 @@ enum QuickSearchPlainRestoreSelection {
     static func invalidates(activeItemID: UUID?, selectedItemID: UUID?) -> Bool {
         activeItemID != nil && activeItemID != selectedItemID
     }
+
+    static func invalidatesRefresh(activeItemID: UUID?, queryChanged: Bool,
+                                   liveItemIDs: Set<UUID>) -> Bool {
+        guard let activeItemID else { return false }
+        return queryChanged || !liveItemIDs.contains(activeItemID)
+    }
 }
 
 struct QuickSearchView: View {
@@ -643,6 +649,7 @@ struct QuickSearchView: View {
     @State private var restoreGeneration = 0
     @State private var preparingPlainTextItemID: UUID?
     @State private var queryGeneration = 0
+    @State private var lastAppliedQuery: String?
     @State private var queuedRestore: (generation: Int, plainTextOnly: Bool)?
     @State private var explicitSelectionID: UUID?
     @Environment(\.colorScheme) private var colorScheme
@@ -806,30 +813,34 @@ struct QuickSearchView: View {
     }
 
     private func applyQuery(_ query: String, preserveSelection: Bool = false) {
+        let history = monitor.history
+        let queryChanged = !preserveSelection || lastAppliedQuery != query
+        lastAppliedQuery = query
         if !preserveSelection { explicitSelectionID = nil }
-        restoreError = nil
+        if QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: preparingPlainTextItemID, queryChanged: queryChanged,
+            liveItemIDs: Set(history.map(\.id))
+        ) {
+            cancelPlainRestore()
+        }
+        if !isPreparingPlainText { restoreError = nil }
         queuedRestore = nil
-        restoreTask?.cancel()
-        restoreGeneration &+= 1
-        isPreparingPlainText = false
-        preparingPlainTextItemID = nil
         searchTask?.cancel()
         let ticket = QuickSearchWorker.invalidate()
         queryGeneration &+= 1
         let generation = queryGeneration
-        let history = monitor.history
         let liveIDs = Set(history.flatMap(\.contents).map(\.id))
         richIndex = richIndex.filter { liveIDs.contains($0.key) }
         richIndexed.formIntersection(liveIDs)
         if query.isEmpty {
             searching = false
             pendingRichText = false
-            publishResults(history, query: query)
+            publishResults(history, query: query, preserveSelection: preserveSelection)
             return
         }
 
-        // Rich import may wait indefinitely on a system helper. One serial worker
-        // indexes each representation once; ordinary text queries never wait for it.
+        // Rich text extraction may be slow. Its own serial worker indexes one
+        // representation at a time; ordinary text queries never wait for it.
         let richContents = history.flatMap(\.contents).filter(\.decodesRichSearchText)
         pendingRichText = richContents.contains { !richIndexed.contains($0.id) }
         if richIndexing.isEmpty,
@@ -864,7 +875,7 @@ struct QuickSearchView: View {
             guard !Task.isCancelled, generation == queryGeneration,
                   manager.isQuickSearchVisible else { return }
             searching = false
-            publishResults(result, query: query)
+            publishResults(result, query: query, preserveSelection: preserveSelection)
             if let queued = queuedRestore, queued.generation == generation {
                 queuedRestore = nil
                 _ = restoreSelection(plainTextOnly: queued.plainTextOnly)
@@ -872,10 +883,20 @@ struct QuickSearchView: View {
         }
     }
 
-    private func publishResults(_ result: [ClipboardHistoryItem], query: String) {
+    private func publishResults(_ result: [ClipboardHistoryItem], query: String,
+                                preserveSelection: Bool) {
         filteredHistory = result
+        // A result refresh may reorder or temporarily omit an item while rich text
+        // is indexing. Only an explicit query/selection change or removal cancels its restore.
+        if isPreparingPlainText, let activeID = preparingPlainTextItemID,
+           let active = monitor.history.first(where: { $0.id == activeID }) {
+            monitor.selectHistoryItem(active)
+            return
+        }
+        let preferredID = preserveSelection
+            ? (explicitSelectionID ?? monitor.selectedHistoryItem?.id) : nil
         monitor.selectHistoryItem(QuickSearchQuery.selection(
-            from: result, preferredID: explicitSelectionID,
+            from: result, preferredID: preferredID,
             currentItemID: monitor.currentItemID, query: query))
     }
 
@@ -886,12 +907,16 @@ struct QuickSearchView: View {
             if !isPreparingPlainText { restoreError = nil }
             return
         }
+        cancelPlainRestore()
+        restoreError = nil
+    }
+
+    private func cancelPlainRestore() {
         restoreTask?.cancel()
         restoreTask = nil
         restoreGeneration &+= 1
         preparingPlainTextItemID = nil
         isPreparingPlainText = false
-        restoreError = nil
     }
 
     private func moveSelection(by offset: Int) -> KeyPress.Result {
@@ -967,7 +992,8 @@ struct QuickSearchView: View {
                 preparingPlainTextItemID = nil
                 guard !Task.isCancelled, manager.isQuickSearchVisible,
                       manager.presentationID == session, searchText == query,
-                      monitor.selectedHistoryItem?.id == selected.id else { return }
+                      monitor.selectedHistoryItem?.id == selected.id,
+                      monitor.history.contains(where: { $0.id == selected.id }) else { return }
                 guard let text else {
                     restoreError = selected.contents.contains(where: {
                         $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
