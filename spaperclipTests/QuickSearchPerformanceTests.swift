@@ -169,6 +169,22 @@ final class QuickSearchPerformanceTests: XCTestCase {
         }
     }
 
+    func testPlainRestoreSelectionInvalidatesOnlyWhenItemChanges() {
+        let first = UUID()
+        let second = UUID()
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: first, selectedItemID: first))
+        XCTAssertTrue(QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: first, selectedItemID: second))
+        XCTAssertTrue(QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: first, selectedItemID: nil))
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: nil, selectedItemID: second))
+        // An onChange for the old item must not cancel a restore started for the new one.
+        XCTAssertFalse(QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: second, selectedItemID: second))
+    }
+
     func testAsyncRestoreRequiresTheSamePasteboardChangeCount() {
         let board = NSPasteboard(name: .init("spaperclip-restore-test-\(UUID())"))
         defer { board.releaseGlobally() }
@@ -223,6 +239,143 @@ final class QuickSearchPerformanceTests: XCTestCase {
         XCTAssertEqual(newResults.map(\.id), [history[1].id])
     }
 
+    func testHTMLExtractorSkipsNonTextResourcesAndDecodesEntities() {
+        let html = """
+            <html><head><title>hidden</title><style>.x { color: red }</style></head>
+            <body><p>first &amp; second</p><script>evil()</script>
+            <div>hello <strong>world</strong><img src="https://example.invalid/no-request.png"></div>
+            </body></html>
+            """
+        let text = LocalHTMLText.decode(Data(html.utf8))
+        XCTAssertEqual(text, "first & second\nhello world")
+        XCTAssertFalse(text?.contains("hidden") == true)
+        XCTAssertFalse(text?.contains("evil()") == true)
+        XCTAssertEqual(LocalHTMLText.decode(Data("<p>hello </p><p>world</p>".utf8)),
+                       "hello\nworld")
+        XCTAssertEqual(LocalHTMLText.decode(Data("<div>hello <strong>world</strong></div>".utf8)),
+                       "hello world")
+        XCTAssertEqual(LocalHTMLText.decode(Data("<pre>  a\n b </pre>".utf8)),
+                       "  a\n b ")
+    }
+
+    @MainActor
+    func testHTMLOnlyUsesOfflineParserForIndexPreviewAndPlainRestore() async {
+        let html = ClipboardContent(data: Data("<b>résumé ✅</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "HTML")
+        let item = ClipboardHistoryItem(timestamp: .now, contents: [html], sourceApplication: nil)
+        XCTAssertTrue(html.usesLocalHTMLText)
+        XCTAssertEqual(html.searchableText(), "résumé ✅")
+        XCTAssertEqual(html.getTextChunk(offset: 0, length: 100)?.text, "résumé ✅")
+        XCTAssertEqual(html.textForDisplay(), "résumé ✅")
+
+        let loaded = expectation(description: "Local HTML parsing completed")
+        RichSearchIndexer.shared.index(html) { text in
+            XCTAssertTrue(text?.contains("résumé ✅") == true)
+            loaded.fulfill()
+        }
+        await fulfillment(of: [loaded], timeout: 10)
+        let preview = await ClipboardPreviewText.chunk(for: html, length: 100)
+        let restored = await PlainRestoreWorker.text(from: item)
+        XCTAssertTrue(preview?.contains("résumé") == true)
+        XCTAssertTrue(restored?.contains("résumé ✅") == true)
+    }
+
+    @MainActor
+    func testBlockedPreviewAndDetailCannotStarveRichIndex() async {
+        let previewContent = ClipboardContent(data: Data("<b>preview</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "Preview")
+        let detailContent = ClipboardContent(data: Data("<b>detail</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "Detail")
+        let searchContent = ClipboardContent(data: Data("<b>search</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "Search")
+        let blocked = expectation(description: "preview and detail started")
+        blocked.expectedFulfillmentCount = 2
+        let searched = expectation(description: "search completed while other lanes blocked")
+        let completed = expectation(description: "blocked reads completed")
+        completed.expectedFulfillmentCount = 2
+        let gate = DispatchSemaphore(value: 0)
+        let indexer = RichSearchIndexer { content in
+            if content.id != searchContent.id {
+                blocked.fulfill()
+                _ = gate.wait(timeout: .now() + 5)
+            }
+            return content.description
+        }
+        indexer.preview(previewContent) { _ in completed.fulfill() }
+        indexer.index(detailContent, allowLarge: true) { _ in completed.fulfill() }
+        await fulfillment(of: [blocked], timeout: 2)
+        indexer.index(searchContent) { text in
+            XCTAssertEqual(text, "Search")
+            searched.fulfill()
+        }
+        await fulfillment(of: [searched], timeout: 2)
+        gate.signal()
+        gate.signal()
+        await fulfillment(of: [completed], timeout: 2)
+    }
+
+    @MainActor
+    func testConcurrentSameContentRichRequestsShareDecode() async {
+        let html = ClipboardContent(data: Data("<b>shared</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "Shared")
+        let started = expectation(description: "one decode started")
+        let finished = expectation(description: "both requests completed")
+        finished.expectedFulfillmentCount = 2
+        let gate = DispatchSemaphore(value: 0)
+        let decodes = DispatchSemaphore(value: 0)
+        let indexer = RichSearchIndexer { _ in
+            decodes.signal()
+            started.fulfill()
+            _ = gate.wait(timeout: .now() + 5)
+            return "shared"
+        }
+        indexer.index(html) { text in
+            XCTAssertEqual(text, "shared")
+            finished.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 2)
+        indexer.preview(html) { text in
+            XCTAssertEqual(text, "shared")
+            finished.fulfill()
+        }
+        gate.signal()
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertTrue(exactlyOneSignal(decodes))
+    }
+
+    @MainActor
+    func testLargeHTMLPreviewDoesNotExpandSearchBound() async {
+        let html = ClipboardContent(data: Data(("<p>start</p>" + String(repeating: " ", count: 500_000)
+            + "<p>end</p>").utf8), formats: [ClipboardFormat(uti: "public.html")],
+            description: "Large HTML")
+        let indexed = expectation(description: "large HTML omitted from search")
+        RichSearchIndexer.shared.index(html) { text in
+            XCTAssertNil(text)
+            indexed.fulfill()
+        }
+        await fulfillment(of: [indexed], timeout: 2)
+        let preview = await ClipboardPreviewText.chunk(for: html, length: 100)
+        XCTAssertEqual(preview, "start\nend")
+    }
+
+    @MainActor
+    func testOversizeHTMLStillRestoresOriginalRepresentation() async {
+        let data = Data(repeating: 65, count: LocalHTMLText.maximumImportBytes + 1)
+        let content = ClipboardContent(data: data, formats: [ClipboardFormat(uti: "public.html")],
+            description: "Oversize HTML")
+        let item = ClipboardHistoryItem(timestamp: .now, contents: [content], sourceApplication: nil)
+        XCTAssertNil(LocalHTMLText.decode(data))
+        let preview = await ClipboardPreviewText.chunk(for: content, length: 100)
+        let transformed = await PlainRestoreWorker.text(from: item)
+        XCTAssertNil(preview)
+        XCTAssertNil(transformed)
+        XCTAssertEqual(ClipboardHistoryPreview.fallbackText(for: item), "(HTML too large to preview)")
+        let board = NSPasteboard(name: .init("oversize-html-\(UUID())"))
+        defer { board.releaseGlobally() }
+        XCTAssertTrue(Utilities.copyAllContentTypes(from: item, to: board))
+        XCTAssertEqual(board.data(forType: .init("public.html")), data)
+    }
+
     @MainActor
     func testBlockedHTMLIndexDoesNotBlockPlainSearchOrMainActor() async {
         let html = ClipboardContent(data: Data("<b>rich needle</b>".utf8),
@@ -255,6 +408,11 @@ final class QuickSearchPerformanceTests: XCTestCase {
         let richResults = await QuickSearchWorker.results(in: [plainItem, richItem],
             query: "rich", richText: [html.id: "rich needle"], ticket: QuickSearchWorker.invalidate())
         XCTAssertEqual(richResults.map(\.id), [richItem.id])
+    }
+
+    private func exactlyOneSignal(_ semaphore: DispatchSemaphore) -> Bool {
+        semaphore.wait(timeout: .now()) == .success
+            && semaphore.wait(timeout: .now()) == .timedOut
     }
 
     private func milliseconds(_ duration: Duration) -> Double {

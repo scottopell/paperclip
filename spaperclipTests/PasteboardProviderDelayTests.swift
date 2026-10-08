@@ -218,6 +218,108 @@ final class PasteboardProviderDelayTests: XCTestCase {
         XCTAssertFalse(monitor.isCapturingHistory)
     }
 
+    private enum CopyEntry: String, CaseIterable {
+        case format, content, allTypes, plainText
+
+        @MainActor
+        func copy(_ item: ClipboardHistoryItem, with monitor: ClipboardMonitor) -> Bool {
+            let content = item.contents[0]
+            switch self {
+            case .format:
+                return monitor.copyFormat(content.formats[0], from: content, in: item)
+            case .content:
+                return monitor.copyContent(content, in: item)
+            case .allTypes:
+                return monitor.copyAllContentTypes(item)
+            case .plainText:
+                return monitor.copyPlainTextOnly(item)
+            }
+        }
+    }
+
+    @MainActor
+    private func savedItem(on monitor: ClipboardMonitor) -> ClipboardHistoryItem {
+        let item = ClipboardHistoryItem(timestamp: Date(timeIntervalSince1970: 1), contents: [
+            ClipboardContent(data: Data("saved text".utf8),
+                             formats: [ClipboardFormat(uti: "public.utf8-plain-text")],
+                             description: "saved text")
+        ], sourceApplication: nil)
+        monitor.applyHistoryItem(item, persist: false)
+        return item
+    }
+
+    @MainActor
+    private func assertNotPromoted(_ item: ClipboardHistoryItem, by monitor: ClipboardMonitor,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(monitor.history.count, 1, file: file, line: line)
+        XCTAssertEqual(monitor.history[0].timestamp, item.timestamp, file: file, line: line)
+        XCTAssertEqual(monitor.selectedHistoryItem?.id, item.id, file: file, line: line)
+        XCTAssertNil(monitor.currentItemID, file: file, line: line)
+    }
+
+    @MainActor
+    func testCopyEntryPointsLeavePendingPromisedClipboardUntouched() async {
+        for entry in CopyEntry.allCases {
+            let board = NSPasteboard(name: .init(UUID().uuidString))
+            defer { board.releaseGlobally() }
+            let monitor = ClipboardMonitor(loadPersistedHistory: false, pasteboard: board)
+            let saved = savedItem(on: monitor)
+            let began = expectation(description: "\(entry.rawValue) provider invoked")
+            let gate = DispatchSemaphore(value: 0)
+            let provider = BlockingProvider(began: began, gate: gate)
+            let type = NSPasteboard.PasteboardType("public.utf8-plain-text")
+            let promised = NSPasteboardItem()
+            XCTAssertTrue(promised.setDataProvider(provider, forTypes: [type]))
+            board.clearContents()
+            XCTAssertTrue(board.writeObjects([promised]))
+            monitor.reconcileCurrentPasteboard(force: true)
+            await fulfillment(of: [began], timeout: 3)
+            let changeCount = board.changeCount
+            let advertisedTypes = board.types
+
+            XCTAssertFalse(entry.copy(saved, with: monitor), entry.rawValue)
+            XCTAssertEqual(board.changeCount, changeCount, entry.rawValue)
+            XCTAssertEqual(board.types, advertisedTypes, entry.rawValue)
+            assertNotPromoted(saved, by: monitor)
+            gate.signal()
+            let finished = expectation(for: NSPredicate { _, _ in !monitor.isCapturingHistory },
+                                       evaluatedWith: nil)
+            await fulfillment(of: [finished], timeout: 5)
+            XCTAssertEqual(board.data(forType: type), Data("stale bytes".utf8))
+        }
+    }
+
+    @MainActor
+    func testCopyEntryPointsLeaveIncompleteSnapshotUntouched() async {
+        for entry in CopyEntry.allCases {
+            let board = NSPasteboard(name: .init(UUID().uuidString))
+            defer { board.releaseGlobally() }
+            let monitor = ClipboardMonitor(loadPersistedHistory: false, pasteboard: board)
+            let saved = savedItem(on: monitor)
+            let readableType = NSPasteboard.PasteboardType("public.utf8-plain-text")
+            let missingType = NSPasteboard.PasteboardType("com.example.unreadable")
+            let external = Data("external bytes".utf8)
+            let promised = NSPasteboardItem()
+            let provider = MissingProvider()
+            XCTAssertTrue(promised.setData(external, forType: readableType))
+            XCTAssertTrue(promised.setDataProvider(provider, forTypes: [missingType]))
+            board.clearContents()
+            XCTAssertTrue(board.writeObjects([promised]))
+            monitor.reconcileCurrentPasteboard(force: true)
+            let failed = expectation(for: NSPredicate { _, _ in monitor.captureIncomplete },
+                                     evaluatedWith: nil)
+            await fulfillment(of: [failed], timeout: 5)
+            let changeCount = board.changeCount
+
+            XCTAssertFalse(entry.copy(saved, with: monitor), entry.rawValue)
+            XCTAssertEqual(board.changeCount, changeCount, entry.rawValue)
+            XCTAssertEqual(board.data(forType: readableType), external, entry.rawValue)
+            XCTAssertTrue(board.types?.contains(missingType) == true, entry.rawValue)
+            XCTAssertTrue(monitor.captureIncomplete, entry.rawValue)
+            assertNotPromoted(saved, by: monitor)
+        }
+    }
+
     private final class CountingMissingProvider: NSObject, NSPasteboardItemDataProvider {
         private(set) var calls = 0
 

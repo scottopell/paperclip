@@ -468,6 +468,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = ("$(inherited)", "-lxml2");
 				PRODUCT_BUNDLE_IDENTIFIER = com.scottopell.spaperclip;
 				PRODUCT_MODULE_NAME = spaperclip;
 				PRODUCT_NAME = Paperclip;
@@ -501,6 +502,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = ("$(inherited)", "-lxml2");
 				PRODUCT_BUNDLE_IDENTIFIER = com.scottopell.spaperclip;
 				PRODUCT_MODULE_NAME = spaperclip;
 				PRODUCT_NAME = Paperclip;

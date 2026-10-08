@@ -73,44 +73,59 @@ enum Utilities {
         return str
     }
 
+    /// Check ownership at the commit boundary, after any conversion or staging.
+    private static func replacePasteboard(
+        _ pasteboard: NSPasteboard,
+        expectedChangeCount: Int?,
+        write: () -> Bool
+    ) -> Bool {
+        guard expectedChangeCount == nil || pasteboard.changeCount == expectedChangeCount else {
+            return false
+        }
+        pasteboard.clearContents()
+        return write()
+    }
+
     /// Copies exactly one representation from a content group to a pasteboard.
     @discardableResult
     static func copy(
         _ format: ClipboardFormat,
         from content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
         guard content.formats.contains(format) else { return false }
-        pasteboard.clearContents()
-        return pasteboard.setData(
-            content.data,
-            forType: NSPasteboard.PasteboardType(format.uti)
-        )
+        let type = NSPasteboard.PasteboardType(format.uti)
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            pasteboard.setData(content.data, forType: type)
+                && pasteboard.data(forType: type) == content.data
+        }
     }
 
     /// Copies every representation in one content group to a pasteboard.
     @discardableResult
     static func copy(
         _ content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        pasteboard.clearContents()
-
-        var copiedAnyContent = false
-        for format in content.formats {
-            copiedAnyContent = pasteboard.setData(
-                content.data,
-                forType: NSPasteboard.PasteboardType(format.uti)
-            ) || copiedAnyContent
+        guard !content.formats.isEmpty else { return false }
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            for format in content.formats {
+                guard pasteboard.setData(content.data, forType: .init(format.uti)) else { return false }
+            }
+            return content.formats.allSatisfy {
+                pasteboard.data(forType: .init($0.uti)) == content.data
+            }
         }
-        return copiedAnyContent
     }
 
     /// Copies all content types from a clipboard history item to a pasteboard.
     @discardableResult
     static func copyAllContentTypes(
         from item: ClipboardHistoryItem,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
         let staged = NSPasteboardItem()
         var representations: [NSPasteboard.PasteboardType: Data] = [:]
@@ -127,22 +142,25 @@ enum Utilities {
         }
         guard !representations.isEmpty else { return false }
 
-        pasteboard.clearContents()
-        guard pasteboard.writeObjects([staged]) else { return false }
-        // A partial write must not be reported as a successful restore.
-        return representations.allSatisfy { entry in
-            pasteboard.data(forType: entry.key) == entry.value
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            guard pasteboard.writeObjects([staged]) else { return false }
+            // A partial write must not be reported as a successful restore.
+            return representations.allSatisfy { entry in
+                pasteboard.data(forType: entry.key) == entry.value
+            }
         }
     }
 
     @discardableResult
     static func copyPlainText(
         from item: ClipboardHistoryItem,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
         guard let text = plainText(from: item) else { return false }
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            pasteboard.setString(text, forType: .string)
+        }
     }
 
     static func plainText(from item: ClipboardHistoryItem) -> String? {
@@ -159,10 +177,10 @@ enum Utilities {
     @discardableResult
     static func copyToClipboard(
         _ content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        guard !content.formats.isEmpty else { return false }
-        return copy(content, to: pasteboard)
+        return copy(content, to: pasteboard, expectedChangeCount: expectedChangeCount)
     }
 }
 

@@ -9,7 +9,11 @@ import SwiftUI
 
 enum ClipboardHistoryPreview {
     static func fallbackText(for item: ClipboardHistoryItem) -> String {
-        item.hasImageRepresentation ? "(Image)" : "(Unsupported format)"
+        if item.hasImageRepresentation { return "(Image)" }
+        if item.contents.contains(where: {
+            $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
+        }) { return "(HTML too large to preview)" }
+        return "(Unsupported format)"
     }
 }
 
@@ -48,20 +52,18 @@ struct HistoryItemRow: View {
             }
             .task(id: item.id) {
                 previewText = "(Loading...)"
-                let preview = await Task.detached(priority: .userInitiated) {
-                    for content in item.contents {
-                        if let (chunk, _) = content.getTextChunk(offset: 0, length: 100) {
-                            if chunk.isEmpty { return "(Empty)" }
-                            if chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                return "(Whitespace only)"
-                            }
-                            return chunk
-                        }
+                for content in item.contents {
+                    if let chunk = await ClipboardPreviewText.chunk(for: content, length: 100) {
+                        guard !Task.isCancelled else { return }
+                        if chunk.isEmpty { previewText = "(Empty)" }
+                        else if chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            previewText = "(Whitespace only)"
+                        } else { previewText = chunk }
+                        return
                     }
-                    return ClipboardHistoryPreview.fallbackText(for: item)
-                }.value
+                }
                 guard !Task.isCancelled else { return }
-                previewText = preview
+                previewText = ClipboardHistoryPreview.fallbackText(for: item)
             }
             .task(id: item.id) {
                 sourceIcon = nil
@@ -655,7 +657,10 @@ struct HistoryListView: View {
                       query == effectiveSearchText,
                       monitor.selectedHistoryItem?.id == item.id else { return }
                 guard let text else {
-                    restoreError = "This item has no plain-text representation."
+                    restoreError = item.contents.contains(where: {
+                        $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
+                    }) ? "HTML is too large to convert. Return restores its original formats."
+                        : "This item has no plain-text representation."
                     return
                 }
                 let board = NSPasteboard.general

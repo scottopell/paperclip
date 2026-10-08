@@ -330,17 +330,18 @@ private struct QuickSearchResultRow: View {
         }
         .task(id: item.id) {
             preview = "Loading…"
-            let text = await Task.detached(priority: .userInitiated) {
-                for content in item.contents {
-                    if let (text, _) = content.getTextChunk(offset: 0, length: 180) {
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty { return trimmed }
+            for content in item.contents {
+                if let text = await ClipboardPreviewText.chunk(for: content, length: 180) {
+                    guard !Task.isCancelled else { return }
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        preview = trimmed
+                        return
                     }
                 }
-                return ClipboardHistoryPreview.fallbackText(for: item)
-            }.value
+            }
             guard !Task.isCancelled else { return }
-            preview = text
+            preview = ClipboardHistoryPreview.fallbackText(for: item)
         }
     }
 }
@@ -396,22 +397,148 @@ private struct QuickSearchResultsList: View {
     }
 }
 
-/// Rich imports have their own serial worker so a stuck system HTML helper cannot
-/// hold up plain-text queries or create one blocked thread per keystroke.
+/// Search owns a serial lane; speculative previews and full-size detail loads
+/// cannot get ahead of indexing or a plain-text restore on that lane.
 final class RichSearchIndexer {
     static let shared = RichSearchIndexer()
-    private let queue = DispatchQueue(label: "com.scottopell.spaperclip.rich-search", qos: .userInitiated)
-    private let decode: (ClipboardContent) -> String?
+    private let searchQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-search", qos: .userInitiated)
+    private let previewQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-preview", qos: .utility)
+    private let detailQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-detail", qos: .userInitiated)
+    private let lock = NSLock()
+    private let cache = NSCache<NSUUID, NSString>()
+    private var indexing: [UUID: [(String?) -> Void]] = [:]
+    private var detailing: [UUID: [(String?) -> Void]] = [:]
+    private var previewing: [UUID: [(String?) -> Void]] = [:]
+    private let decode: ((ClipboardContent) -> String?)?
 
-    init(decode: @escaping (ClipboardContent) -> String? = { $0.searchableText() }) {
+    // The injection is for blocked-parser tests; production parses HTML locally.
+    init(decode: ((ClipboardContent) -> String?)? = nil) {
         self.decode = decode
+        cache.totalCostLimit = 16_000_000
     }
 
-    func index(_ content: ClipboardContent, completion: @escaping (String?) -> Void) {
-        queue.async {
-            let text = self.decode(content)
-            DispatchQueue.main.async { completion(text) }
+    /// Search is limited to 500 KB. Explicit full-size reads use another lane.
+    func index(_ content: ClipboardContent, allowLarge: Bool = false,
+               completion: @escaping (String?) -> Void) {
+        if content.usesLocalHTMLText && content.data.count > LocalHTMLText.maximumImportBytes {
+            DispatchQueue.main.async { completion(nil) }
+            return
         }
+        if !allowLarge && content.usesLocalHTMLText && content.data.count >= 500_000 {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        lock.lock()
+        if let cached = cache.object(forKey: content.id as NSUUID) {
+            lock.unlock()
+            DispatchQueue.main.async { completion(cached as String) }
+            return
+        }
+        if allowLarge, content.data.count < 500_000, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if allowLarge, detailing[content.id] != nil {
+            detailing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if !allowLarge, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if allowLarge {
+            detailing[content.id] = [completion]
+        } else {
+            indexing[content.id] = [completion]
+        }
+        lock.unlock()
+
+        let work = {
+            let text = self.decoded(content)
+            self.lock.lock()
+            if let text, text.utf8.count <= self.cache.totalCostLimit {
+                self.cache.setObject(text as NSString, forKey: content.id as NSUUID,
+                                     cost: text.utf8.count)
+            }
+            let completions: [(String?) -> Void]
+            if allowLarge {
+                completions = self.detailing.removeValue(forKey: content.id) ?? []
+            } else {
+                completions = self.indexing.removeValue(forKey: content.id) ?? []
+            }
+            self.lock.unlock()
+            DispatchQueue.main.async { completions.forEach { $0(text) } }
+        }
+        if allowLarge {
+            detailQueue.async(execute: work)
+        } else {
+            searchQueue.async(execute: work)
+        }
+    }
+
+    /// A preview can join an active search, but search never joins a preview.
+    func preview(_ content: ClipboardContent, completion: @escaping (String?) -> Void) {
+        if content.usesLocalHTMLText && content.data.count > LocalHTMLText.maximumImportBytes {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        lock.lock()
+        if let cached = cache.object(forKey: content.id as NSUUID) {
+            lock.unlock()
+            DispatchQueue.main.async { completion(cached as String) }
+            return
+        }
+        if content.data.count < 500_000, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if detailing[content.id] != nil {
+            detailing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if previewing[content.id] != nil {
+            previewing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        previewing[content.id] = [completion]
+        lock.unlock()
+        previewQueue.async {
+            let text = self.decoded(content)
+            self.lock.lock()
+            if let text, text.utf8.count <= self.cache.totalCostLimit {
+                self.cache.setObject(text as NSString, forKey: content.id as NSUUID,
+                                     cost: text.utf8.count)
+            }
+            let completions = self.previewing.removeValue(forKey: content.id) ?? []
+            self.lock.unlock()
+            DispatchQueue.main.async { completions.forEach { $0(text) } }
+        }
+    }
+
+    private func decoded(_ content: ClipboardContent) -> String? {
+        if let decode { return decode(content) }
+        if content.usesLocalHTMLText { return LocalHTMLText.decode(content.data) }
+        return content.searchableText()
+    }
+}
+
+enum ClipboardPreviewText {
+    static func chunk(for content: ClipboardContent, length: Int) async -> String? {
+        if content.usesLocalHTMLText {
+            let text: String? = await withCheckedContinuation { continuation in
+                RichSearchIndexer.shared.preview(content) { continuation.resume(returning: $0) }
+            }
+            return text.map { String($0.prefix(length)) }
+        }
+        return await Task.detached(priority: .userInitiated) {
+            content.getTextChunk(offset: 0, length: length)?.text
+        }.value
     }
 }
 
@@ -457,9 +584,45 @@ enum PlainRestoreWorker {
     static let queue = DispatchQueue(label: "com.scottopell.spaperclip.plain-restore", qos: .userInitiated)
 
     static func text(from item: ClipboardHistoryItem) async -> String? {
-        await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: Utilities.plainText(from: item)) }
+        // An explicit plain-text representation takes priority even if HTML was
+        // captured first. Never route HTML through the synchronous importer.
+        if let plain = item.contents.first(where: { content in
+            content.formats.contains(where: {
+                $0.uti == "public.utf8-plain-text" || $0.uti == "public.plain-text"
+            })
+        }), let text = await text(from: plain) { return text }
+        for content in item.contents {
+            if let text = await text(from: content) { return text }
         }
+        return nil
+    }
+
+    private static func text(from content: ClipboardContent) async -> String? {
+        if content.usesLocalHTMLText {
+            if content.data.count >= 500_000 {
+                // Explicit conversion keeps the whole item, independently of
+                // the bounded search index and speculative detail previews.
+                return await withCheckedContinuation { continuation in
+                    queue.async {
+                        continuation.resume(returning: LocalHTMLText.decode(content.data))
+                    }
+                }
+            }
+            return await withCheckedContinuation { continuation in
+                RichSearchIndexer.shared.index(content) { text in
+                    continuation.resume(returning: text)
+                }
+            }
+        }
+        return await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: content.searchableText()) }
+        }
+    }
+}
+
+enum QuickSearchPlainRestoreSelection {
+    static func invalidates(activeItemID: UUID?, selectedItemID: UUID?) -> Bool {
+        activeItemID != nil && activeItemID != selectedItemID
     }
 }
 
@@ -478,6 +641,7 @@ struct QuickSearchView: View {
     @State private var restoreTask: Task<Void, Never>?
     @State private var isPreparingPlainText = false
     @State private var restoreGeneration = 0
+    @State private var preparingPlainTextItemID: UUID?
     @State private var queryGeneration = 0
     @State private var queuedRestore: (generation: Int, plainTextOnly: Bool)?
     @State private var explicitSelectionID: UUID?
@@ -542,6 +706,8 @@ struct QuickSearchView: View {
                     isPending: searching || pendingRichText || monitor.isCapturingHistory
                         || monitor.captureIncomplete,
                     onUserSelect: { item in
+                        queuedRestore = nil
+                        selectionChanged(to: item.id)
                         explicitSelectionID = item.id
                         monitor.selectHistoryItem(item)
                     }
@@ -604,6 +770,11 @@ struct QuickSearchView: View {
         .onChange(of: monitor.history) { _, _ in
             applyQuery(searchText, preserveSelection: true)
         }
+        .onChange(of: monitor.selectedHistoryItem?.id) { oldID, selectedID in
+            guard oldID != selectedID else { return }
+            guard selectedID == monitor.selectedHistoryItem?.id else { return }
+            selectionChanged(to: selectedID)
+        }
         .onChange(of: manager.isQuickSearchVisible) { _, visible in
             if !visible {
                 queryGeneration &+= 1
@@ -614,6 +785,7 @@ struct QuickSearchView: View {
                 restoreTask?.cancel()
                 restoreGeneration &+= 1
                 isPreparingPlainText = false
+                preparingPlainTextItemID = nil
             }
         }
         .task(id: manager.presentationID) {
@@ -640,6 +812,7 @@ struct QuickSearchView: View {
         restoreTask?.cancel()
         restoreGeneration &+= 1
         isPreparingPlainText = false
+        preparingPlainTextItemID = nil
         searchTask?.cancel()
         let ticket = QuickSearchWorker.invalidate()
         queryGeneration &+= 1
@@ -706,16 +879,37 @@ struct QuickSearchView: View {
             currentItemID: monitor.currentItemID, query: query))
     }
 
+    private func selectionChanged(to selectedID: UUID?) {
+        guard QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: preparingPlainTextItemID, selectedItemID: selectedID
+        ) else {
+            if !isPreparingPlainText { restoreError = nil }
+            return
+        }
+        restoreTask?.cancel()
+        restoreTask = nil
+        restoreGeneration &+= 1
+        preparingPlainTextItemID = nil
+        isPreparingPlainText = false
+        restoreError = nil
+    }
+
     private func moveSelection(by offset: Int) -> KeyPress.Result {
         guard !filteredHistory.isEmpty else { return .handled }
-        restoreError = nil
+        queuedRestore = nil
 
         let currentIndex = monitor.selectedHistoryItem.flatMap { selected in
             filteredHistory.firstIndex(where: { $0.id == selected.id })
         } ?? 0
         let nextIndex = min(max(currentIndex + offset, 0), filteredHistory.count - 1)
-        explicitSelectionID = filteredHistory[nextIndex].id
-        monitor.selectHistoryItem(filteredHistory[nextIndex])
+        let next = filteredHistory[nextIndex]
+        if monitor.selectedHistoryItem?.id != next.id {
+            selectionChanged(to: next.id)
+        } else {
+            restoreError = nil
+        }
+        explicitSelectionID = next.id
+        monitor.selectHistoryItem(next)
         return .handled
     }
 
@@ -765,15 +959,20 @@ struct QuickSearchView: View {
             let generation = restoreGeneration
             isPreparingPlainText = true
             restoreError = "Preparing plain text…"
+            preparingPlainTextItemID = selected.id
             restoreTask = Task {
                 let text = await PlainRestoreWorker.text(from: selected)
                 guard generation == restoreGeneration else { return }
                 isPreparingPlainText = false
+                preparingPlainTextItemID = nil
                 guard !Task.isCancelled, manager.isQuickSearchVisible,
                       manager.presentationID == session, searchText == query,
                       monitor.selectedHistoryItem?.id == selected.id else { return }
                 guard let text else {
-                    restoreError = "This item has no plain-text representation."
+                    restoreError = selected.contents.contains(where: {
+                        $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
+                    }) ? "HTML is too large to convert. Return restores its original formats."
+                        : "This item has no plain-text representation."
                     return
                 }
                 let board = NSPasteboard.general

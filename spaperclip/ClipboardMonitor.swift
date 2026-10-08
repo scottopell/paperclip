@@ -32,6 +32,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import libxml2
 import os
 
 // MARK: - Models
@@ -193,6 +194,92 @@ final class ClipboardSearchTextCache {
 }
 
 
+/// Extracts local HTML text without a browser, resource loads, or XPC.
+/// WebKit's async HTML importer loads external image URLs, even with a CSP meta tag.
+/// This approximates rendered text; it does not interpret CSS layout or visibility.
+enum LocalHTMLText {
+    // DOM construction can use far more memory than the source HTML bytes.
+    // Raw representations remain restorable regardless of this preview limit.
+    static let maximumImportBytes = 2_000_000
+
+    static func decode(_ data: Data) -> String? {
+        guard !data.isEmpty, data.count <= maximumImportBytes else { return nil }
+        let options = Int32(HTML_PARSE_NONET.rawValue | HTML_PARSE_NOERROR.rawValue
+            | HTML_PARSE_NOWARNING.rawValue)
+        let document = data.withUnsafeBytes { bytes in
+            htmlReadMemory(bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
+                           Int32(bytes.count), nil, nil, options)
+        }
+        guard let document else { return nil }
+        defer { xmlFreeDoc(document) }
+        guard let reader = xmlReaderWalker(document) else { return nil }
+        defer { xmlFreeTextReader(reader) }
+
+        func value(_ pointer: UnsafePointer<xmlChar>?) -> String {
+            guard let pointer else { return "" }
+            return String(cString: UnsafeRawPointer(pointer).assumingMemoryBound(to: CChar.self))
+        }
+        let skipped: Set<String> = ["head", "script", "style", "template", "noscript", "svg"]
+        let blocks: Set<String> = ["article", "blockquote", "br", "dd", "div", "dt",
+                                   "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li",
+                                   "ol", "p", "pre", "section", "table", "td", "th", "tr", "ul"]
+        var text = ""
+        var pendingSpace = false
+        var skippedDepth: Int32?
+        var preformattedDepth: Int32?
+        func newline() {
+            pendingSpace = false
+            if !text.isEmpty && !text.hasSuffix("\n") { text.append("\n") }
+        }
+        while true {
+            let status = xmlTextReaderRead(reader)
+            if status == 0 { break }
+            if status < 0 { return nil }
+            let kind = xmlTextReaderNodeType(reader)
+            let depth = xmlTextReaderDepth(reader)
+            if let hiddenDepth = skippedDepth {
+                if kind == XML_READER_TYPE_END_ELEMENT.rawValue && depth == hiddenDepth {
+                    skippedDepth = nil
+                }
+                continue
+            }
+            if kind == XML_READER_TYPE_ELEMENT.rawValue {
+                let tag = value(xmlTextReaderConstLocalName(reader)).lowercased()
+                if skipped.contains(tag) {
+                    if xmlTextReaderIsEmptyElement(reader) != 1 { skippedDepth = depth }
+                } else {
+                    if blocks.contains(tag) { newline() }
+                    if tag == "pre" { preformattedDepth = depth }
+                }
+            } else if kind == XML_READER_TYPE_END_ELEMENT.rawValue {
+                let tag = value(xmlTextReaderConstLocalName(reader)).lowercased()
+                if tag == "pre" && preformattedDepth == depth { preformattedDepth = nil }
+                if blocks.contains(tag) { newline() }
+            } else if kind == XML_READER_TYPE_TEXT.rawValue
+                || kind == XML_READER_TYPE_CDATA.rawValue
+                || kind == XML_READER_TYPE_SIGNIFICANT_WHITESPACE.rawValue {
+                let fragment = value(xmlTextReaderConstValue(reader))
+                if preformattedDepth != nil {
+                    text += fragment
+                } else {
+                    for character in fragment {
+                        if character.isWhitespace {
+                            pendingSpace = true
+                        } else {
+                            if pendingSpace && !text.isEmpty && !text.hasSuffix("\n") {
+                                text.append(" ")
+                            }
+                            pendingSpace = false
+                            text.append(character)
+                        }
+                    }
+                }
+            }
+        }
+        return text.trimmingCharacters(in: .newlines)
+    }
+}
+
 /// Represents a single piece of data from the clipboard with its available formats
 /// Implements efficient handling of potentially large data objects
 struct ClipboardContent: Identifiable, Hashable {
@@ -323,23 +410,13 @@ struct ClipboardContent: Identifiable, Hashable {
                 }
             }
         }
-        // Then try HTML format - cannot do partial loading, so load all for small files
-        else if formats.first(where: {
-            $0.uti == UTType.html.identifier || $0.uti == "public.html"
-        }) != nil, data.count < 500_000 {
-            if let attributedString = try? NSAttributedString(
-                data: data, options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil)
-            {
-                let string = attributedString.string
-                // Apply offset and length
-                let endOffset = min(offset + length, string.count)
-                if offset < string.count {
-                    let startIndex = string.index(string.startIndex, offsetBy: offset)
-                    let endIndex = string.index(string.startIndex, offsetBy: endOffset)
-                    return (String(string[startIndex..<endIndex]), endOffset)
-                }
-            }
+        // HTML text is parsed locally; UI preview callers use the background indexer.
+        else if usesLocalHTMLText, data.count < 500_000,
+                let string = LocalHTMLText.decode(data), offset < string.count {
+            let start = string.index(string.startIndex, offsetBy: offset)
+            let endOffset = min(offset + length, string.count)
+            let end = string.index(string.startIndex, offsetBy: endOffset)
+            return (String(string[start..<end]), endOffset)
         }
         // Try URL format
         else if formats.first(where: {
@@ -381,29 +458,28 @@ struct ClipboardContent: Identifiable, Hashable {
         }
 
         if formats.contains(where: {
-            $0.uti == UTType.html.identifier || $0.uti == "public.html"
-        }) {
-            return try? NSAttributedString(
-                data: data,
-                options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil
-            ).string
-        }
-
-        if formats.contains(where: {
             $0.uti == UTType.url.identifier || $0.uti == "public.url"
         }) {
             return String(data: data, encoding: .utf8)
         }
+        if usesLocalHTMLText { return LocalHTMLText.decode(data) }
 
         return nil
     }
 
     /// Returns complete text for filtering. Plain text and URLs are decoded in full.
-    /// Rich text and HTML retain a 500 KB safety bound because AppKit parsing can be
-    /// substantially more expensive than decoding plain text.
+    /// Rich content retains a 500 KB safety bound. HTML parsing is local and
+    /// cannot request linked resources; UI callers run it off the main thread.
     func searchableText(cache: ClipboardSearchTextCache = .shared) -> String? {
         cache.text(for: self) { decodeSearchableText() }
+    }
+
+    /// HTML uses the local parser; RTF takes precedence when a group advertises both.
+    var usesLocalHTMLText: Bool {
+        let identifiers = Set(formats.map(\.uti))
+        return decodesRichSearchText
+            && !identifiers.contains(UTType.rtf.identifier) && !identifiers.contains("public.rtf")
+            && (identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html"))
     }
 
     var decodesRichSearchText: Bool {
@@ -446,13 +522,7 @@ struct ClipboardContent: Identifiable, Hashable {
                 documentAttributes: nil
             ).string
         }
-        if identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html") {
-            return try? NSAttributedString(
-                data: data,
-                options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil
-            ).string
-        }
+        if usesLocalHTMLText { return LocalHTMLText.decode(data) }
         return nil
     }
 
@@ -477,16 +547,8 @@ struct ClipboardContent: Identifiable, Hashable {
                     return attributedString.string
                 }
             }
-            // Then try HTML format
-            else if formats.first(where: {
-                $0.uti == UTType.html.identifier || $0.uti == "public.html"
-            }) != nil {
-                if let attributedString = try? NSAttributedString(
-                    data: data, options: [.documentType: NSAttributedString.DocumentType.html],
-                    documentAttributes: nil)
-                {
-                    return attributedString.string
-                }
+            else if usesLocalHTMLText {
+                return LocalHTMLText.decode(data)
             }
             // Try URL format
             else if formats.first(where: {
@@ -990,8 +1052,11 @@ class ClipboardMonitor: ObservableObject {
         from content: ClipboardContent,
         in item: ClipboardHistoryItem
     ) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copy(format, from: content, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copy(format, from: content, to: pasteboard,
+                             expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy format: no representation was written")
             return false
         }
@@ -1035,8 +1100,11 @@ class ClipboardMonitor: ObservableObject {
     /// Copies one content group without recording the app's own write.
     @discardableResult
     func copyContent(_ content: ClipboardContent, in item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyToClipboard(content, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyToClipboard(content, to: pasteboard,
+                                        expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy content: no representation was written")
             return false
         }
@@ -1052,8 +1120,11 @@ class ClipboardMonitor: ObservableObject {
     /// Copies all representations of a history item without recording the app's own write.
     @discardableResult
     func copyAllContentTypes(_ item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyAllContentTypes(from: item, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyAllContentTypes(from: item, to: pasteboard,
+                                            expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy history item: no content was written")
             return false
         }
@@ -1071,8 +1142,11 @@ class ClipboardMonitor: ObservableObject {
     /// with applications that only support plain text
     @discardableResult
     func copyPlainTextOnly(_ item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyPlainText(from: item, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyPlainText(from: item, to: pasteboard,
+                                      expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy plain text: pasteboard write failed")
             return false
         }
@@ -1085,9 +1159,21 @@ class ClipboardMonitor: ObservableObject {
         return true
     }
 
+    /// Do not replace an external write that has not yet been captured.
+    private func canReplacePasteboard() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !captureInFlight, !captureIncomplete, pasteboard.changeCount == lastChangeCount else {
+            reconcileCurrentPasteboard()
+            logger.warning("Cannot copy: clipboard capture is pending or incomplete")
+            return false
+        }
+        return true
+    }
+
     /// Called after an explicitly transformed plain-text representation is written.
     func promoteRestoredItem(_ item: ClipboardHistoryItem) {
-        lastChangeCount = NSPasteboard.general.changeCount
+        guard !captureInFlight, !captureIncomplete else { return }
+        lastChangeCount = pasteboard.changeCount
         captureGeneration &+= 1
         captureIncomplete = false
         promoteToCurrent(item)

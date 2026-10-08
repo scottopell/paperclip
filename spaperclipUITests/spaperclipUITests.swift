@@ -68,8 +68,9 @@ final class spaperclipUITests: XCTestCase {
         searchField.typeText("XCUITest clipboard")
         XCTAssertTrue(capturedRow.waitForExistence(timeout: 2))
 
-        NSPasteboard.general.clearContents()
+        let beforeRestore = NSPasteboard.general.changeCount
         searchField.typeKey(.return, modifierFlags: [])
+        XCTAssertGreaterThan(NSPasteboard.general.changeCount, beforeRestore)
         XCTAssertEqual(
             NSPasteboard.general.string(forType: .string),
             capturedText,
@@ -114,8 +115,9 @@ final class spaperclipUITests: XCTestCase {
 
         // Newest is selected first; Down selects the older matching result.
         field.typeKey(.downArrow, modifierFlags: [])
-        NSPasteboard.general.clearContents()
+        let beforeOlderRestore = NSPasteboard.general.changeCount
         field.typeKey(.return, modifierFlags: [])
+        XCTAssertGreaterThan(NSPasteboard.general.changeCount, beforeOlderRestore)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), olderValue)
         dismissPermissionFallbackIfNeeded(field: field, in: app)
 
@@ -129,8 +131,9 @@ final class spaperclipUITests: XCTestCase {
             quickSearchRow(containing: olderValue, in: app).waitForExistence(timeout: 2),
             "Expected the restored item in the reopened Quick Search history"
         )
-        NSPasteboard.general.clearContents()
+        let beforeRepeatedRestore = NSPasteboard.general.changeCount
         field.typeKey(.return, modifierFlags: [])
+        XCTAssertGreaterThan(NSPasteboard.general.changeCount, beforeRepeatedRestore)
         XCTAssertEqual(
             NSPasteboard.general.string(forType: .string),
             olderValue,
@@ -300,8 +303,9 @@ final class spaperclipUITests: XCTestCase {
         app.typeText("Quick shortcut")
         XCTAssertTrue(app.staticTexts[value].waitForExistence(timeout: 2))
 
-        NSPasteboard.general.clearContents()
+        let beforePlainRestore = NSPasteboard.general.changeCount
         field.typeKey(.return, modifierFlags: [.shift])
+        XCTAssertGreaterThan(NSPasteboard.general.changeCount, beforePlainRestore)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), value)
         dismissPermissionFallbackIfNeeded(field: field, in: app)
     }
