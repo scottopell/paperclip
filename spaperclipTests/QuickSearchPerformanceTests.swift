@@ -159,6 +159,16 @@ final class QuickSearchPerformanceTests: XCTestCase {
             indexedRichText: [content.id: text]).map(\.id), [item.id])
     }
 
+    func testIndexedRichTextKeepsDiacriticInsensitiveMatchesAcrossSizeBound() {
+        let content = ClipboardContent(data: Data("<b>résumé</b>".utf8),
+            formats: [ClipboardFormat(uti: "public.html")], description: "HTML")
+        let item = ClipboardHistoryItem(timestamp: .now, contents: [content], sourceApplication: nil)
+        for text in ["résumé", String(repeating: "x", count: 100_000) + "résumé"] {
+            XCTAssertEqual(QuickSearchQuery.results(in: [item], matching: "resume",
+                indexedRichText: [content.id: text]).map(\.id), [item.id])
+        }
+    }
+
     func testAsyncRestoreRequiresTheSamePasteboardChangeCount() {
         let board = NSPasteboard(name: .init("spaperclip-restore-test-\(UUID())"))
         defer { board.releaseGlobally() }

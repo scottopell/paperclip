@@ -619,6 +619,13 @@ struct HistoryListView: View {
     }
 
     private func restoreSelectedItem() -> KeyPress.Result {
+        monitor.reconcileCurrentPasteboard()
+        guard !monitor.isCapturingHistory, !monitor.captureIncomplete else {
+            restoreError = monitor.captureIncomplete
+                ? "Clipboard capture failed. Copy again before restoring history."
+                : "Wait for clipboard capture before restoring history."
+            return .handled
+        }
         guard !searching, !queryIsDebouncing,
               let item = selectedItem,
               filteredHistory.contains(where: { $0.id == item.id }) else {

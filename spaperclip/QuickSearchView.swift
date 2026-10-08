@@ -35,7 +35,8 @@ enum QuickSearchQuery {
                     // A small HTML document can expand into a very large plain-text
                     // value. Bound matching by decoded size, not only source bytes.
                     if content.data.count >= 100_000 || text.utf8.count >= 100_000 {
-                        guard text.localizedCaseInsensitiveContains(normalizedQuery) else {
+                        guard text.range(of: normalizedQuery,
+                            options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
                             return nil
                         }
                         return MatchRank(matchKind: 2, wordStarts: 0,
