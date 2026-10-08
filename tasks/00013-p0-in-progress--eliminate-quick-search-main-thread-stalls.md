@@ -66,3 +66,7 @@ An independent pass found that preparatory work could outlive the initial clipbo
 ## Third Codex review
 
 Context-menu copy actions now report rejected writes in the row and accessibility value. A same-query index/history refresh no longer cancels a still-valid Shift-Return conversion; user query/selection changes, item removal, session change, and a new clipboard write still cancel or reject stale work. Focused state tests and the full unit target pass; arm64 Release build passes. Installed-app UI checks remain open.
+
+## Fourth Codex review
+
+Shift-Return conversion now isolates local text/HTML from RTF's uninterruptible platform parser. RTF uses at most two workers; cancellation releases the caller, and a saturated RTF parser reports conversion unavailable instead of hanging later plain-text requests. Image preview decoding is bounded to two concurrent operations across view-owned workers, so rapid selection does not accumulate detached PDFKit work or let one window cancel another window's preview. Clear History also evicts the shared rich-text cache, completes pending requests without results, and releases queued clipboard bytes before stale work runs. Regression tests cover one and two blocked RTF conversions, rapid image selection, two view instances, cache invalidation, and skipped queued rich parses. Full unit target: 110 passed, 0 failed; arm64 Release build passed. Truly blocked native decodes already inside synchronous calls cannot be killed in-process, so UI manual acceptance remains open.

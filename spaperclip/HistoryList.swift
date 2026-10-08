@@ -694,7 +694,7 @@ struct HistoryListView: View {
                     restoreError = item.contents.contains(where: {
                         $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
                     }) ? "HTML is too large to convert. Return restores its original formats."
-                        : "This item has no plain-text representation."
+                        : "Plain-text conversion is unavailable. Return restores original formats."
                     return
                 }
                 let board = NSPasteboard.general

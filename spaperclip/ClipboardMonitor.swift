@@ -855,6 +855,8 @@ class ClipboardMonitor: ObservableObject {
         captureGeneration &+= 1
         lastChangeCount = pasteboard.changeCount
         captureIncomplete = false
+        ClipboardSearchTextCache.shared.removeAll()
+        RichSearchIndexer.shared.removeAll()
         guard !history.isEmpty else {
             completion?()
             return
@@ -864,7 +866,6 @@ class ClipboardMonitor: ObservableObject {
         currentItem = nil
         currentItemID = nil
         selectedHistoryItem = nil
-        ClipboardSearchTextCache.shared.removeAll()
 
         persistenceManager.clearAllHistory { [weak self] in
             self?.logger.info("Clipboard history cleared and persistence data removed")

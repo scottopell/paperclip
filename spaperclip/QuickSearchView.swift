@@ -406,15 +406,76 @@ final class RichSearchIndexer {
     private let detailQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-detail", qos: .userInitiated)
     private let lock = NSLock()
     private let cache = NSCache<NSUUID, NSString>()
+    /// Queued work holds a box, not clipboard bytes. Clear History can discard
+    /// those bytes even if a preceding platform conversion has not returned.
+    private final class ContentBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var content: ClipboardContent?
+
+        init(_ content: ClipboardContent) { self.content = content }
+        func value() -> ClipboardContent? {
+            lock.lock()
+            defer { lock.unlock() }
+            return content
+        }
+        func invalidate() {
+            lock.lock()
+            content = nil
+            lock.unlock()
+        }
+    }
+    private var pendingBoxes: [UUID: [ContentBox]] = [:]
     private var indexing: [UUID: [(String?) -> Void]] = [:]
     private var detailing: [UUID: [(String?) -> Void]] = [:]
     private var previewing: [UUID: [(String?) -> Void]] = [:]
+    private var generation = 0
     private let decode: ((ClipboardContent) -> String?)?
 
     // The injection is for blocked-parser tests; production parses HTML locally.
     init(decode: ((ClipboardContent) -> String?)? = nil) {
         self.decode = decode
         cache.totalCostLimit = 16_000_000
+    }
+
+    /// Discard cached text and finish outstanding reads without retaining their results.
+    func removeAll() {
+        lock.lock()
+        generation &+= 1
+        cache.removeAllObjects()
+        for boxes in pendingBoxes.values {
+            for box in boxes { box.invalidate() }
+        }
+        pendingBoxes.removeAll()
+        let completions = Array(indexing.values.joined())
+            + Array(detailing.values.joined()) + Array(previewing.values.joined())
+        indexing.removeAll()
+        detailing.removeAll()
+        previewing.removeAll()
+        lock.unlock()
+        DispatchQueue.main.async { completions.forEach { $0(nil) } }
+    }
+
+    private func isCurrent(_ ticket: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation == ticket
+    }
+
+    private func release(_ box: ContentBox, id: UUID) {
+        lock.lock()
+        pendingBoxes[id]?.removeAll(where: { $0 === box })
+        if pendingBoxes[id]?.isEmpty == true { pendingBoxes.removeValue(forKey: id) }
+        lock.unlock()
+    }
+
+    private func deliver(_ text: String?, to completions: [(String?) -> Void],
+                         generation ticket: Int) {
+        DispatchQueue.main.async {
+            self.lock.lock()
+            let valid = self.generation == ticket
+            self.lock.unlock()
+            completions.forEach { $0(valid ? text : nil) }
+        }
     }
 
     /// Search is limited to 500 KB. Explicit full-size reads use another lane.
@@ -429,9 +490,10 @@ final class RichSearchIndexer {
             return
         }
         lock.lock()
+        let ticket = generation
         if let cached = cache.object(forKey: content.id as NSUUID) {
             lock.unlock()
-            DispatchQueue.main.async { completion(cached as String) }
+            deliver(cached as String, to: [completion], generation: ticket)
             return
         }
         if allowLarge, content.data.count < 500_000, indexing[content.id] != nil {
@@ -449,28 +511,37 @@ final class RichSearchIndexer {
             lock.unlock()
             return
         }
+        let id = content.id
+        let box = ContentBox(content)
+        pendingBoxes[id, default: []].append(box)
         if allowLarge {
-            detailing[content.id] = [completion]
+            detailing[id] = [completion]
         } else {
-            indexing[content.id] = [completion]
+            indexing[id] = [completion]
         }
         lock.unlock()
 
         let work = {
-            let text = self.decoded(content)
+            defer { self.release(box, id: id) }
+            guard self.isCurrent(ticket), let captured = box.value() else { return }
+            let text = self.decoded(captured)
             self.lock.lock()
+            guard self.generation == ticket else {
+                self.lock.unlock()
+                return
+            }
             if let text, text.utf8.count <= self.cache.totalCostLimit {
-                self.cache.setObject(text as NSString, forKey: content.id as NSUUID,
+                self.cache.setObject(text as NSString, forKey: id as NSUUID,
                                      cost: text.utf8.count)
             }
             let completions: [(String?) -> Void]
             if allowLarge {
-                completions = self.detailing.removeValue(forKey: content.id) ?? []
+                completions = self.detailing.removeValue(forKey: id) ?? []
             } else {
-                completions = self.indexing.removeValue(forKey: content.id) ?? []
+                completions = self.indexing.removeValue(forKey: id) ?? []
             }
             self.lock.unlock()
-            DispatchQueue.main.async { completions.forEach { $0(text) } }
+            self.deliver(text, to: completions, generation: ticket)
         }
         if allowLarge {
             detailQueue.async(execute: work)
@@ -486,9 +557,10 @@ final class RichSearchIndexer {
             return
         }
         lock.lock()
+        let ticket = generation
         if let cached = cache.object(forKey: content.id as NSUUID) {
             lock.unlock()
-            DispatchQueue.main.async { completion(cached as String) }
+            deliver(cached as String, to: [completion], generation: ticket)
             return
         }
         if content.data.count < 500_000, indexing[content.id] != nil {
@@ -506,18 +578,27 @@ final class RichSearchIndexer {
             lock.unlock()
             return
         }
-        previewing[content.id] = [completion]
+        let id = content.id
+        let box = ContentBox(content)
+        pendingBoxes[id, default: []].append(box)
+        previewing[id] = [completion]
         lock.unlock()
         previewQueue.async {
-            let text = self.decoded(content)
+            defer { self.release(box, id: id) }
+            guard self.isCurrent(ticket), let captured = box.value() else { return }
+            let text = self.decoded(captured)
             self.lock.lock()
+            guard self.generation == ticket else {
+                self.lock.unlock()
+                return
+            }
             if let text, text.utf8.count <= self.cache.totalCostLimit {
-                self.cache.setObject(text as NSString, forKey: content.id as NSUUID,
+                self.cache.setObject(text as NSString, forKey: id as NSUUID,
                                      cost: text.utf8.count)
             }
-            let completions = self.previewing.removeValue(forKey: content.id) ?? []
+            let completions = self.previewing.removeValue(forKey: id) ?? []
             self.lock.unlock()
-            DispatchQueue.main.async { completions.forEach { $0(text) } }
+            self.deliver(text, to: completions, generation: ticket)
         }
     }
 
@@ -581,41 +662,117 @@ enum ClipboardRestorePrecondition {
 }
 
 enum PlainRestoreWorker {
-    static let queue = DispatchQueue(label: "com.scottopell.spaperclip.plain-restore", qos: .userInitiated)
+    private static let localQueue = DispatchQueue(
+        label: "com.scottopell.spaperclip.local-plain-restore", qos: .userInitiated)
+    // A stuck platform conversion must not poison every future Shift-Return.
+    // Bound simultaneous work; cancellation releases the caller immediately.
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.scottopell.spaperclip.plain-restore"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 2
+        return queue
+    }()
+
+    // Continuation and cancellation state are always accessed under lock.
+    private final class Request: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<String?, Never>?
+        private var operation: Operation?
+        private var cancelled = false
+
+        func start(_ continuation: CheckedContinuation<String?, Never>, operation: Operation) -> Bool {
+            lock.lock()
+            if cancelled {
+                lock.unlock()
+                continuation.resume(returning: nil)
+                return false
+            }
+            self.continuation = continuation
+            self.operation = operation
+            lock.unlock()
+            return true
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+
+        func complete(_ result: String?) {
+            lock.lock()
+            let waiting = continuation
+            continuation = nil
+            operation = nil
+            lock.unlock()
+            waiting?.resume(returning: result)
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let waiting = continuation
+            continuation = nil
+            let running = operation
+            operation = nil
+            lock.unlock()
+            running?.cancel()
+            waiting?.resume(returning: nil)
+        }
+    }
 
     static func text(from item: ClipboardHistoryItem) async -> String? {
         // An explicit plain-text representation takes priority even if HTML was
-        // captured first. Never route HTML through the synchronous importer.
+        // captured first. Never route HTML through AppKit's synchronous importer.
         if let plain = item.contents.first(where: { content in
             content.formats.contains(where: {
                 $0.uti == "public.utf8-plain-text" || $0.uti == "public.plain-text"
             })
         }), let text = await text(from: plain) { return text }
         for content in item.contents {
+            if Task.isCancelled { return nil }
             if let text = await text(from: content) { return text }
         }
         return nil
     }
 
-    private static func text(from content: ClipboardContent) async -> String? {
-        if content.usesLocalHTMLText {
-            if content.data.count >= 500_000 {
-                // Explicit conversion keeps the whole item, independently of
-                // the bounded search index and speculative detail previews.
-                return await withCheckedContinuation { continuation in
-                    queue.async {
-                        continuation.resume(returning: LocalHTMLText.decode(content.data))
-                    }
-                }
-            }
+    static func text(from content: ClipboardContent,
+                     decode: @escaping (ClipboardContent) -> String? = { $0.searchableText() }) async -> String? {
+        if content.usesLocalHTMLText && content.data.count < 500_000 {
             return await withCheckedContinuation { continuation in
                 RichSearchIndexer.shared.index(content) { text in
                     continuation.resume(returning: text)
                 }
             }
         }
-        return await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: content.searchableText()) }
+        if content.usesLocalHTMLText || !content.decodesRichSearchText {
+            // Plain text, URLs, and offline HTML must not queue behind RTF's
+            // platform importer, which cannot be interrupted mid-conversion.
+            return await withCheckedContinuation { continuation in
+                localQueue.async {
+                    continuation.resume(returning: content.usesLocalHTMLText
+                        ? LocalHTMLText.decode(content.data) : decode(content))
+                }
+            }
+        }
+        // A pair of uninterruptible RTF conversions can occupy both workers.
+        // Reject more requests instead of leaving the user waiting indefinitely.
+        guard queue.operationCount < 2 else { return nil }
+        let request = Request()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak request] in
+                    guard let request, !request.isCancelled else { return }
+                    request.complete(decode(content))
+                }
+                if request.start(continuation, operation: operation) {
+                    queue.addOperation(operation)
+                }
+            }
+        } onCancel: {
+            request.cancel()
         }
     }
 }
@@ -998,7 +1155,7 @@ struct QuickSearchView: View {
                     restoreError = selected.contents.contains(where: {
                         $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
                     }) ? "HTML is too large to convert. Return restores its original formats."
-                        : "This item has no plain-text representation."
+                        : "Plain-text conversion is unavailable. Return restores original formats."
                     return
                 }
                 let board = NSPasteboard.general

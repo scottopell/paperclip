@@ -392,6 +392,70 @@ final class QuickSearchPerformanceTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelledSlowPlainRestoreDoesNotBlockNextItem() async {
+        let slow = ClipboardContent(data: Data("{\\rtf1 slow}".utf8),
+            formats: [ClipboardFormat(uti: "public.rtf")], description: "slow")
+        let plain = ClipboardContent(data: Data("next result".utf8),
+            formats: [ClipboardFormat(uti: "public.utf8-plain-text")], description: "next")
+        let entered = expectation(description: "slow rich conversion entered")
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let stale = Task {
+            await PlainRestoreWorker.text(from: slow) { _ in
+                entered.fulfill()
+                _ = gate.wait(timeout: .now() + 5)
+                return "old result"
+            }
+        }
+        await fulfillment(of: [entered], timeout: 2)
+        stale.cancel()
+        let cancelled = await stale.value
+        XCTAssertNil(cancelled)
+        let next = await PlainRestoreWorker.text(from: plain)
+        XCTAssertEqual(next, "next result")
+    }
+
+    @MainActor
+    func testTwoBlockedRTFRestoresDoNotBlockPlainOrQueueAThird() async {
+        let rtf = ClipboardContent(data: Data("{\\rtf1 blocked}".utf8),
+            formats: [ClipboardFormat(uti: "public.rtf")], description: "RTF")
+        let plain = ClipboardContent(data: Data("still available".utf8),
+            formats: [ClipboardFormat(uti: "public.utf8-plain-text")], description: "Plain")
+        let entered = expectation(description: "two conversions started")
+        entered.expectedFulfillmentCount = 2
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal(); gate.signal() }
+        let first = Task {
+            await PlainRestoreWorker.text(from: rtf) { _ in
+                entered.fulfill()
+                _ = gate.wait(timeout: .now() + 5)
+                return "first"
+            }
+        }
+        let second = Task {
+            await PlainRestoreWorker.text(from: rtf) { _ in
+                entered.fulfill()
+                _ = gate.wait(timeout: .now() + 5)
+                return "second"
+            }
+        }
+        await fulfillment(of: [entered], timeout: 2)
+        first.cancel()
+        second.cancel()
+        let a = await first.value
+        let b = await second.value
+        XCTAssertNil(a)
+        XCTAssertNil(b)
+        let available = await PlainRestoreWorker.text(from: plain)
+        XCTAssertEqual(available, "still available")
+        let third = await PlainRestoreWorker.text(from: rtf) { _ in
+            XCTFail("A third RTF conversion must not wait behind two stuck calls")
+            return "unexpected"
+        }
+        XCTAssertNil(third)
+    }
+
+    @MainActor
     func testBlockedHTMLIndexDoesNotBlockPlainSearchOrMainActor() async {
         let html = ClipboardContent(data: Data("<b>rich needle</b>".utf8),
             formats: [ClipboardFormat(uti: "public.html")], description: "HTML")
