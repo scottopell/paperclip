@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "spaperclip",
     platforms: [
-        .macOS(.v15)
+        .macOS("15.0")
     ],
     products: [
         .executable(name: "spaperclip", targets: ["spaperclip"])
@@ -21,7 +21,8 @@ let package = Package(
                 .process("Assets.xcassets"),
                 .process("Preview Content"),
                 .process("spaperclip.entitlements"),
-            ]
+            ],
+            linkerSettings: [.linkedLibrary("xml2")]
         ),
         .testTarget(
             name: "spaperclipTests",

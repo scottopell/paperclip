@@ -412,6 +412,57 @@ final class ClipboardMVPTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
     }
 
+    func testAllTypesRestorePreservesExactRepresentationBytes() {
+        let pasteboard = NSPasteboard(name: .init("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let text = Data([0xFF, 0xFE, 0x41, 0x00])
+        let html = Data("<b>other</b>".utf8)
+        let image = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF])
+        let item = ClipboardHistoryItem(timestamp: Date(), contents: [
+            ClipboardContent(data: text, formats: [ClipboardFormat(uti: "public.utf8-plain-text")], description: "text"),
+            ClipboardContent(data: html, formats: [ClipboardFormat(uti: "public.html")], description: "HTML"),
+            ClipboardContent(data: image, formats: [ClipboardFormat(uti: "public.png")], description: "image")
+        ], sourceApplication: nil)
+
+        XCTAssertTrue(Utilities.copyAllContentTypes(from: item, to: pasteboard))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+        XCTAssertEqual(pasteboard.data(forType: .init("public.utf8-plain-text")), text)
+        XCTAssertEqual(pasteboard.data(forType: .init("public.html")), html)
+        XCTAssertEqual(pasteboard.data(forType: .init("public.png")), image)
+    }
+
+    func testAllTypesRestoreRejectsConflictingDuplicateWithoutChangingPasteboard() {
+        let pasteboard = NSPasteboard(name: .init("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
+        let oldChangeCount = pasteboard.changeCount
+        let item = ClipboardHistoryItem(timestamp: Date(), contents: [
+            ClipboardContent(data: Data("first".utf8), formats: [ClipboardFormat(uti: "public.html")], description: "first"),
+            ClipboardContent(data: Data("second".utf8), formats: [ClipboardFormat(uti: "public.html")], description: "second")
+        ], sourceApplication: nil)
+
+        XCTAssertFalse(Utilities.copyAllContentTypes(from: item, to: pasteboard))
+        XCTAssertEqual(pasteboard.changeCount, oldChangeCount)
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+    }
+
+    func testPlainTextRestorePrefersExplicitTextOverEarlierHTML() {
+        let pasteboard = NSPasteboard(name: .init("spaperclip-tests-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let html = ClipboardContent(data: Data("<b>not the text</b>".utf8),
+                                    formats: [ClipboardFormat(uti: "public.html")], description: "HTML")
+        let plain = ClipboardContent(data: Data("exact chosen text 👋".utf8),
+                                     formats: [ClipboardFormat(uti: "public.utf8-plain-text")], description: "text")
+        let item = ClipboardHistoryItem(timestamp: Date(), contents: [html, plain], sourceApplication: nil)
+        let cache = ClipboardSearchTextCache.shared
+        cache.removeAll()
+
+        XCTAssertTrue(Utilities.copyPlainText(from: item, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "exact chosen text 👋")
+        XCTAssertFalse(pasteboard.types?.contains(.init("public.html")) == true)
+        XCTAssertEqual(cache.decodeCount(for: html), 0)
+    }
+
     func testPlainTextRestoreRejectsImageWithoutClearingPasteboard() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("spaperclip-tests-\(UUID())"))
         defer { pasteboard.releaseGlobally() }

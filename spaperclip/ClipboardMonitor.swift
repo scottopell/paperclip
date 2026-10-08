@@ -32,6 +32,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import libxml2
 import os
 
 // MARK: - Models
@@ -105,29 +106,62 @@ final class ClipboardSearchTextCache {
     static let shared = ClipboardSearchTextCache(totalCostLimit: 128 * 1_024 * 1_024)
 
     private let cache = NSCache<NSUUID, NSString>()
+    private let failedRichText = NSCache<NSUUID, NSNumber>()
     private let matchCache = NSCache<NSString, NSNumber>()
-    private let textLock = NSLock()
     private let lock = NSLock()
+    private final class PendingDecode {
+        let done = DispatchGroup()
+        var result: String?
+
+        init() { done.enter() }
+    }
+    private var inFlight: [UUID: PendingDecode] = [:]
+    private var generation = 0
     private var decodeCounts: [UUID: Int] = [:]
 
     init(totalCostLimit: Int) {
         cache.totalCostLimit = totalCostLimit
+        failedRichText.countLimit = 1_000
         matchCache.countLimit = 10_000
     }
 
     func text(for content: ClipboardContent, decode: () -> String?) -> String? {
-        textLock.lock()
-        defer { textLock.unlock() }
-
         let key = content.id as NSUUID
-        if let cached = cache.object(forKey: key) { return cached as String }
-
-        guard let text = decode() else { return nil }
-        cache.setObject(text as NSString, forKey: key, cost: text.utf8.count)
         lock.lock()
-        decodeCounts[content.id, default: 0] += 1
+        if let cached = cache.object(forKey: key) {
+            lock.unlock()
+            return cached as String
+        }
+        if failedRichText.object(forKey: key) != nil {
+            lock.unlock()
+            return nil
+        }
+        if let pending = inFlight[content.id] {
+            lock.unlock()
+            pending.done.wait() // Never hold the cache lock during another item's decode.
+            return pending.result
+        }
+        let pending = PendingDecode()
+        inFlight[content.id] = pending
+        let currentGeneration = generation
         lock.unlock()
-        return text
+
+        let result = decode()
+
+        lock.lock()
+        if generation == currentGeneration {
+            if let result {
+                cache.setObject(result as NSString, forKey: key, cost: result.utf8.count)
+                decodeCounts[content.id, default: 0] += 1
+            } else if content.decodesRichSearchText {
+                failedRichText.setObject(NSNumber(value: true), forKey: key)
+            }
+            inFlight.removeValue(forKey: content.id)
+        }
+        pending.result = result
+        lock.unlock()
+        pending.done.leave()
+        return result
     }
 
     func matches(_ query: String, in content: ClipboardContent) -> Bool {
@@ -148,14 +182,103 @@ final class ClipboardSearchTextCache {
     }
 
     func removeAll() {
-        cache.removeAllObjects()
-        matchCache.removeAllObjects()
         lock.lock()
+        generation &+= 1
+        cache.removeAllObjects()
+        failedRichText.removeAllObjects()
+        matchCache.removeAllObjects()
+        inFlight.removeAll()
         decodeCounts.removeAll()
         lock.unlock()
     }
 }
 
+
+/// Extracts local HTML text without a browser, resource loads, or XPC.
+/// WebKit's async HTML importer loads external image URLs, even with a CSP meta tag.
+/// This approximates rendered text; it does not interpret CSS layout or visibility.
+enum LocalHTMLText {
+    // DOM construction can use far more memory than the source HTML bytes.
+    // Raw representations remain restorable regardless of this preview limit.
+    static let maximumImportBytes = 2_000_000
+
+    static func decode(_ data: Data) -> String? {
+        guard !data.isEmpty, data.count <= maximumImportBytes else { return nil }
+        let options = Int32(HTML_PARSE_NONET.rawValue | HTML_PARSE_NOERROR.rawValue
+            | HTML_PARSE_NOWARNING.rawValue)
+        let document = data.withUnsafeBytes { bytes in
+            htmlReadMemory(bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
+                           Int32(bytes.count), nil, nil, options)
+        }
+        guard let document else { return nil }
+        defer { xmlFreeDoc(document) }
+        guard let reader = xmlReaderWalker(document) else { return nil }
+        defer { xmlFreeTextReader(reader) }
+
+        func value(_ pointer: UnsafePointer<xmlChar>?) -> String {
+            guard let pointer else { return "" }
+            return String(cString: UnsafeRawPointer(pointer).assumingMemoryBound(to: CChar.self))
+        }
+        let skipped: Set<String> = ["head", "script", "style", "template", "noscript", "svg"]
+        let blocks: Set<String> = ["article", "blockquote", "br", "dd", "div", "dt",
+                                   "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li",
+                                   "ol", "p", "pre", "section", "table", "td", "th", "tr", "ul"]
+        var text = ""
+        var pendingSpace = false
+        var skippedDepth: Int32?
+        var preformattedDepth: Int32?
+        func newline() {
+            pendingSpace = false
+            if !text.isEmpty && !text.hasSuffix("\n") { text.append("\n") }
+        }
+        while true {
+            let status = xmlTextReaderRead(reader)
+            if status == 0 { break }
+            if status < 0 { return nil }
+            let kind = xmlTextReaderNodeType(reader)
+            let depth = xmlTextReaderDepth(reader)
+            if let hiddenDepth = skippedDepth {
+                if kind == XML_READER_TYPE_END_ELEMENT.rawValue && depth == hiddenDepth {
+                    skippedDepth = nil
+                }
+                continue
+            }
+            if kind == XML_READER_TYPE_ELEMENT.rawValue {
+                let tag = value(xmlTextReaderConstLocalName(reader)).lowercased()
+                if skipped.contains(tag) {
+                    if xmlTextReaderIsEmptyElement(reader) != 1 { skippedDepth = depth }
+                } else {
+                    if blocks.contains(tag) { newline() }
+                    if tag == "pre" { preformattedDepth = depth }
+                }
+            } else if kind == XML_READER_TYPE_END_ELEMENT.rawValue {
+                let tag = value(xmlTextReaderConstLocalName(reader)).lowercased()
+                if tag == "pre" && preformattedDepth == depth { preformattedDepth = nil }
+                if blocks.contains(tag) { newline() }
+            } else if kind == XML_READER_TYPE_TEXT.rawValue
+                || kind == XML_READER_TYPE_CDATA.rawValue
+                || kind == XML_READER_TYPE_SIGNIFICANT_WHITESPACE.rawValue {
+                let fragment = value(xmlTextReaderConstValue(reader))
+                if preformattedDepth != nil {
+                    text += fragment
+                } else {
+                    for character in fragment {
+                        if character.isWhitespace {
+                            pendingSpace = true
+                        } else {
+                            if pendingSpace && !text.isEmpty && !text.hasSuffix("\n") {
+                                text.append(" ")
+                            }
+                            pendingSpace = false
+                            text.append(character)
+                        }
+                    }
+                }
+            }
+        }
+        return text.trimmingCharacters(in: .newlines)
+    }
+}
 
 /// Represents a single piece of data from the clipboard with its available formats
 /// Implements efficient handling of potentially large data objects
@@ -287,23 +410,13 @@ struct ClipboardContent: Identifiable, Hashable {
                 }
             }
         }
-        // Then try HTML format - cannot do partial loading, so load all for small files
-        else if formats.first(where: {
-            $0.uti == UTType.html.identifier || $0.uti == "public.html"
-        }) != nil, data.count < 500_000 {
-            if let attributedString = try? NSAttributedString(
-                data: data, options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil)
-            {
-                let string = attributedString.string
-                // Apply offset and length
-                let endOffset = min(offset + length, string.count)
-                if offset < string.count {
-                    let startIndex = string.index(string.startIndex, offsetBy: offset)
-                    let endIndex = string.index(string.startIndex, offsetBy: endOffset)
-                    return (String(string[startIndex..<endIndex]), endOffset)
-                }
-            }
+        // HTML text is parsed locally; UI preview callers use the background indexer.
+        else if usesLocalHTMLText, data.count < 500_000,
+                let string = LocalHTMLText.decode(data), offset < string.count {
+            let start = string.index(string.startIndex, offsetBy: offset)
+            let endOffset = min(offset + length, string.count)
+            let end = string.index(string.startIndex, offsetBy: endOffset)
+            return (String(string[start..<end]), endOffset)
         }
         // Try URL format
         else if formats.first(where: {
@@ -345,29 +458,40 @@ struct ClipboardContent: Identifiable, Hashable {
         }
 
         if formats.contains(where: {
-            $0.uti == UTType.html.identifier || $0.uti == "public.html"
-        }) {
-            return try? NSAttributedString(
-                data: data,
-                options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil
-            ).string
-        }
-
-        if formats.contains(where: {
             $0.uti == UTType.url.identifier || $0.uti == "public.url"
         }) {
             return String(data: data, encoding: .utf8)
         }
+        if usesLocalHTMLText { return LocalHTMLText.decode(data) }
 
         return nil
     }
 
     /// Returns complete text for filtering. Plain text and URLs are decoded in full.
-    /// Rich text and HTML retain a 500 KB safety bound because AppKit parsing can be
-    /// substantially more expensive than decoding plain text.
+    /// Rich content retains a 500 KB safety bound. HTML parsing is local and
+    /// cannot request linked resources; UI callers run it off the main thread.
     func searchableText(cache: ClipboardSearchTextCache = .shared) -> String? {
         cache.text(for: self) { decodeSearchableText() }
+    }
+
+    /// HTML uses the local parser; RTF takes precedence when a group advertises both.
+    var usesLocalHTMLText: Bool {
+        let identifiers = Set(formats.map(\.uti))
+        return decodesRichSearchText
+            && !identifiers.contains(UTType.rtf.identifier) && !identifiers.contains("public.rtf")
+            && (identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html"))
+    }
+
+    var decodesRichSearchText: Bool {
+        let identifiers = Set(formats.map(\.uti))
+        if identifiers.contains(UTType.plainText.identifier)
+            || identifiers.contains("public.utf8-plain-text")
+            || identifiers.contains(UTType.url.identifier)
+            || identifiers.contains("public.url")
+            || identifiers.contains(UTType.fileURL.identifier)
+            || identifiers.contains("public.file-url") { return false }
+        return identifiers.contains(UTType.rtf.identifier) || identifiers.contains("public.rtf")
+            || identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html")
     }
 
     fileprivate func decodeSearchableText() -> String? {
@@ -398,13 +522,7 @@ struct ClipboardContent: Identifiable, Hashable {
                 documentAttributes: nil
             ).string
         }
-        if identifiers.contains(UTType.html.identifier) || identifiers.contains("public.html") {
-            return try? NSAttributedString(
-                data: data,
-                options: [.documentType: NSAttributedString.DocumentType.html],
-                documentAttributes: nil
-            ).string
-        }
+        if usesLocalHTMLText { return LocalHTMLText.decode(data) }
         return nil
     }
 
@@ -429,16 +547,8 @@ struct ClipboardContent: Identifiable, Hashable {
                     return attributedString.string
                 }
             }
-            // Then try HTML format
-            else if formats.first(where: {
-                $0.uti == UTType.html.identifier || $0.uti == "public.html"
-            }) != nil {
-                if let attributedString = try? NSAttributedString(
-                    data: data, options: [.documentType: NSAttributedString.DocumentType.html],
-                    documentAttributes: nil)
-                {
-                    return attributedString.string
-                }
+            else if usesLocalHTMLText {
+                return LocalHTMLText.decode(data)
             }
             // Try URL format
             else if formats.first(where: {
@@ -627,8 +737,15 @@ class ClipboardMonitor: ObservableObject {
     @Published var selectedHistoryItem: ClipboardHistoryItem?
     @Published var currentItemID: UUID?
     @Published var isLoadingHistory: Bool = false
+    @Published private(set) var isCapturingHistory = false
+    @Published private(set) var captureIncomplete = false
 
     private var timer: Timer?
+    private let pasteboard: NSPasteboard
+    private let captureQueue = DispatchQueue(label: "com.scottopell.spaperclip.capture", qos: .userInitiated)
+    // Main-queue state. Only one worker read may be pending per monitor.
+    private var captureInFlight = false
+    private var captureGeneration = 0
     private var lastChangeCount: Int = 0
     private let logger = Logger(
         subsystem: "com.scottopell.spaperclip", category: "ClipboardMonitor")
@@ -654,10 +771,10 @@ class ClipboardMonitor: ObservableObject {
     // Add a flag to track initial state
     private var initialStartupComplete = false
 
-    init(loadPersistedHistory: Bool = true) {
+    init(loadPersistedHistory: Bool = true, pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
         logger.info("Application starting")
 
-        let pasteboard = NSPasteboard.general
         lastChangeCount = pasteboard.changeCount
 
         guard loadPersistedHistory else {
@@ -730,10 +847,16 @@ class ClipboardMonitor: ObservableObject {
     func stopMonitoring() {
         timer?.invalidate()
         timer = nil
+        captureGeneration &+= 1
         logger.info("Clipboard monitoring stopped")
     }
 
     func clearHistory(completion: (() -> Void)? = nil) {
+        captureGeneration &+= 1
+        lastChangeCount = pasteboard.changeCount
+        captureIncomplete = false
+        ClipboardSearchTextCache.shared.removeAll()
+        RichSearchIndexer.shared.removeAll()
         guard !history.isEmpty else {
             completion?()
             return
@@ -743,7 +866,6 @@ class ClipboardMonitor: ObservableObject {
         currentItem = nil
         currentItemID = nil
         selectedHistoryItem = nil
-        ClipboardSearchTextCache.shared.removeAll()
 
         persistenceManager.clearAllHistory { [weak self] in
             self?.logger.info("Clipboard history cleared and persistence data removed")
@@ -785,32 +907,69 @@ class ClipboardMonitor: ObservableObject {
         reconcileCurrentPasteboard()
     }
 
-    /// Captures an external pasteboard write immediately instead of waiting for the polling timer.
-    /// Quick Search calls this before starting a new presentation session.
+    /// Schedules a read without making the polling timer or Quick Search wait for a data provider.
     func reconcileCurrentPasteboard(force: Bool = false) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard initialStartupComplete else {
-            logger.info("Skipping clipboard reconciliation during initial startup")
-            return
+        guard initialStartupComplete else { return }
+        let pasteboard = self.pasteboard
+        let changed = pasteboard.changeCount != lastChangeCount
+        if changed {
+            // The old Current marker no longer describes the pasteboard. Keep browsing selection.
+            currentItem = nil
+            currentItemID = nil
         }
-
-        let pasteboard = NSPasteboard.general
-        let currentChangeCount = pasteboard.changeCount
-        guard force || currentChangeCount != lastChangeCount else { return }
-
-        logger.info("Clipboard changed: \(self.lastChangeCount) -> \(currentChangeCount)")
-        lastChangeCount = currentChangeCount
-        updateFromClipboard()
+        guard !captureInFlight, force || changed else { return }
+        let knownTypes = self.knownTypes
+        let generation = captureGeneration
+        let lastCount = lastChangeCount
+        let sourceApp = NSWorkspace.shared.frontmostApplication.map {
+            SourceApplicationInfo(bundleIdentifier: $0.bundleIdentifier, applicationName: $0.localizedName)
+        }
+        captureInFlight = true
+        isCapturingHistory = true
+        captureQueue.async { [weak self] in
+            let startCount = pasteboard.changeCount
+            let captured: ClipboardHistoryItem? = (force || startCount != lastCount)
+                ? Self.updateFromClipboard(pasteboard: pasteboard, knownTypes: knownTypes,
+                                           sourceAppInfo: sourceApp)
+                : nil
+            let hasAdvertisedTypes = !(pasteboard.types ?? []).isEmpty
+            let endCount = pasteboard.changeCount
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.captureInFlight = false
+                self.isCapturingHistory = false
+                guard self.captureGeneration == generation else { return }
+                // Do not publish a mixed snapshot, a superseded capture, or our own write.
+                guard startCount == endCount, self.pasteboard.changeCount == endCount else {
+                    self.currentItem = nil
+                    self.currentItemID = nil
+                    self.reconcileCurrentPasteboard()
+                    return
+                }
+                guard force || endCount != self.lastChangeCount else { return }
+                guard let captured else {
+                    // Whether empty or incomplete, no saved item is current. Consume this
+                    // change count so a failed provider is not read again on every poll.
+                    self.currentItem = nil
+                    self.currentItemID = nil
+                    self.lastChangeCount = endCount
+                    self.captureIncomplete = hasAdvertisedTypes
+                    return
+                }
+                self.captureIncomplete = false
+                self.lastChangeCount = endCount
+                self.applyHistoryItem(captured)
+            }
+        }
     }
 
-    /// Captures clipboard content, groups it by unique data objects,
-    /// and updates history with deduplicated entries
-    private func updateFromClipboard() {
-        let pasteboard = NSPasteboard.general
-
-        guard let availableTypes = pasteboard.types else {
-            return
-        }
+    /// Reads every representation on the worker; a provider may block this thread.
+    /// A changeCount check before and after this function guards the entire snapshot.
+    private static func updateFromClipboard(
+        pasteboard: NSPasteboard, knownTypes: [String], sourceAppInfo: SourceApplicationInfo?
+    ) -> ClipboardHistoryItem? {
+        guard let availableTypes = pasteboard.types else { return nil }
 
         // Content grouping strategy:
         // 1. Group identical binary data with different formats together
@@ -830,9 +989,9 @@ class ClipboardMonitor: ObservableObject {
 
         // First pass: collect all data and formats
         for type in knownTypes {
-            if availableTypes.contains(NSPasteboard.PasteboardType(type)),
-                let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type))
-            {
+            if availableTypes.contains(NSPasteboard.PasteboardType(type)) {
+                guard let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type))
+                else { return nil }
                 let description =
                     type == "public.utf8-plain-text"
                     ? (String(data: data, encoding: .utf8) ?? "Unknown text data")
@@ -851,9 +1010,8 @@ class ClipboardMonitor: ObservableObject {
         // Check for any other types
         for type in availableTypes {
             let typeString = type.rawValue
-            if !knownTypes.contains(typeString),
-                let data = pasteboard.data(forType: type)
-            {
+            if !knownTypes.contains(typeString) {
+                guard let data = pasteboard.data(forType: type) else { return nil }
                 let format = ClipboardFormat(uti: typeString)
 
                 if let existing = contentGroups[data] {
@@ -876,45 +1034,10 @@ class ClipboardMonitor: ObservableObject {
             )
         }
 
-        // Get source application information
-        var sourceAppInfo: SourceApplicationInfo? = nil
-
-        // Get the frontmost application as our best guess for the source
-        if let frontmostApp = NSWorkspace.shared.frontmostApplication {
-            sourceAppInfo = SourceApplicationInfo(
-                bundleIdentifier: frontmostApp.bundleIdentifier,
-                applicationName: frontmostApp.localizedName
-            )
-            self.logger.info(
-                "Presumed source application: \(frontmostApp.localizedName ?? "Unknown")")
-        }
-
-        // Additional processing for specific pasteboard types that might contain origin info
-        // Some applications put ownership information in custom pasteboard types
-        for type in availableTypes {
-            // Check for application-specific pasteboard types that might indicate source
-            if type.rawValue.contains("CorePasteboardFlavorType")
-                || type.rawValue.starts(with: "com.apple.") || type.rawValue.contains(".originator")
-            {
-                self.logger.info(
-                    "Found potential source identifier pasteboard type: \(type.rawValue)")
-                // These could be parsed to get more accurate source info
-            }
-        }
-
-        let newItem = ClipboardHistoryItem(
-            timestamp: Date(),
-            contents: contents,
-            sourceApplication: sourceAppInfo
+        guard !contents.isEmpty else { return nil }
+        return ClipboardHistoryItem(
+            timestamp: Date(), contents: contents, sourceApplication: sourceAppInfo
         )
-
-        applyHistoryItem(newItem)
-
-        // Update last change count after processing
-        self.lastChangeCount = pasteboard.changeCount
-
-        self.logger.info(
-            "UI updated with clipboard content: \(contents.count) content groups")
     }
 
     private func markCurrent(_ item: ClipboardHistoryItem) {
@@ -930,12 +1053,17 @@ class ClipboardMonitor: ObservableObject {
         from content: ClipboardContent,
         in item: ClipboardHistoryItem
     ) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copy(format, from: content, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copy(format, from: content, to: pasteboard,
+                             expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy format: no representation was written")
             return false
         }
 
+        captureGeneration &+= 1
+        captureIncomplete = false
         lastChangeCount = pasteboard.changeCount
         promoteToCurrent(item)
         logger.info("Copied one format from history item")
@@ -973,12 +1101,17 @@ class ClipboardMonitor: ObservableObject {
     /// Copies one content group without recording the app's own write.
     @discardableResult
     func copyContent(_ content: ClipboardContent, in item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyToClipboard(content, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyToClipboard(content, to: pasteboard,
+                                        expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy content: no representation was written")
             return false
         }
 
+        captureGeneration &+= 1
+        captureIncomplete = false
         lastChangeCount = pasteboard.changeCount
         promoteToCurrent(item)
         logger.info("Copied content from history item")
@@ -988,12 +1121,17 @@ class ClipboardMonitor: ObservableObject {
     /// Copies all representations of a history item without recording the app's own write.
     @discardableResult
     func copyAllContentTypes(_ item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyAllContentTypes(from: item, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyAllContentTypes(from: item, to: pasteboard,
+                                            expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy history item: no content was written")
             return false
         }
 
+        captureGeneration &+= 1
+        captureIncomplete = false
         lastChangeCount = pasteboard.changeCount
         promoteToCurrent(item)
         logger.info("Copied all content types from history item")
@@ -1005,16 +1143,41 @@ class ClipboardMonitor: ObservableObject {
     /// with applications that only support plain text
     @discardableResult
     func copyPlainTextOnly(_ item: ClipboardHistoryItem) -> Bool {
-        let pasteboard = NSPasteboard.general
-        guard Utilities.copyPlainText(from: item, to: pasteboard) else {
+        guard canReplacePasteboard() else { return false }
+        let pasteboard = self.pasteboard
+        guard Utilities.copyPlainText(from: item, to: pasteboard,
+                                      expectedChangeCount: lastChangeCount) else {
+            reconcileCurrentPasteboard()
             logger.warning("Cannot copy plain text: pasteboard write failed")
             return false
         }
 
+        captureGeneration &+= 1
+        captureIncomplete = false
         lastChangeCount = pasteboard.changeCount
         promoteToCurrent(item)
         logger.info("Copied plain text only from history item")
         return true
+    }
+
+    /// Do not replace an external write that has not yet been captured.
+    private func canReplacePasteboard() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !captureInFlight, !captureIncomplete, pasteboard.changeCount == lastChangeCount else {
+            reconcileCurrentPasteboard()
+            logger.warning("Cannot copy: clipboard capture is pending or incomplete")
+            return false
+        }
+        return true
+    }
+
+    /// Called after an explicitly transformed plain-text representation is written.
+    func promoteRestoredItem(_ item: ClipboardHistoryItem) {
+        guard !captureInFlight, !captureIncomplete else { return }
+        lastChangeCount = pasteboard.changeCount
+        captureGeneration &+= 1
+        captureIncomplete = false
+        promoteToCurrent(item)
     }
 
     private func promoteToCurrent(_ item: ClipboardHistoryItem) {

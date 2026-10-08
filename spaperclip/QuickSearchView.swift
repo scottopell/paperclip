@@ -19,14 +19,31 @@ enum QuickSearchQuery {
     }
 
     static func results(
-        in history: [ClipboardHistoryItem], matching query: String
+        in history: [ClipboardHistoryItem], matching query: String,
+        indexedRichText: [UUID: String]? = nil,
+        shouldCancel: () -> Bool = { false }
     ) -> [ClipboardHistoryItem] {
         let normalizedQuery = normalized(query)
         guard !normalizedQuery.isEmpty else { return history }
 
         var ranked: [(item: ClipboardHistoryItem, rank: MatchRank, recency: Int)] = []
         for (index, item) in history.enumerated() {
+            if shouldCancel() { return [] }
             let ranks = item.contents.compactMap { content -> MatchRank? in
+                if content.decodesRichSearchText, let indexedRichText {
+                    guard let text = indexedRichText[content.id] else { return nil }
+                    // A small HTML document can expand into a very large plain-text
+                    // value. Bound matching by decoded size, not only source bytes.
+                    if content.data.count >= 100_000 || text.utf8.count >= 100_000 {
+                        guard text.range(of: normalizedQuery,
+                            options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
+                            return nil
+                        }
+                        return MatchRank(matchKind: 2, wordStarts: 0,
+                                         span: normalizedQuery.count, gaps: 0, start: 0)
+                    }
+                    return rank(text: text, query: normalizedQuery)
+                }
                 // Preserve detailed fuzzy ranking for normal clipboard values. Building
                 // character arrays for a 1 MiB value on every keystroke would defeat the
                 // bounded full-text cache, so large values use a cached contiguous match
@@ -55,6 +72,14 @@ enum QuickSearchQuery {
         return ranked.map { $0.item }
     }
 
+    static func selection(from results: [ClipboardHistoryItem], preferredID: UUID?,
+                          currentItemID: UUID?, query: String) -> ClipboardHistoryItem? {
+        if let preferredID, let selected = results.first(where: { $0.id == preferredID }) {
+            return selected
+        }
+        return initialSelection(from: results, currentItemID: currentItemID, query: query)
+    }
+
     static func initialSelection(
         from results: [ClipboardHistoryItem],
         currentItemID: UUID?,
@@ -80,39 +105,64 @@ enum QuickSearchQuery {
         }
 
         if let range = contiguousRange(of: queryCharacters, in: textCharacters) {
-            let positions = range.map { $0 }
             return MatchRank(
                 matchKind: 2,
-                wordStarts: wordStartCount(in: textCharacters, positions: positions),
+                wordStarts: wordStartCount(in: textCharacters, positions: range),
                 span: range.count,
                 gaps: 0,
                 start: range.lowerBound
             )
         }
 
-        var best: MatchRank?
-        for start in textCharacters.indices where textCharacters[start] == queryCharacters[0] {
-            var positions = [start]
-            var textIndex = start + 1
-            var queryIndex = 1
-
-            while textIndex < textCharacters.count && queryIndex < queryCharacters.count {
-                if textCharacters[textIndex] == queryCharacters[queryIndex] {
-                    positions.append(textIndex)
-                    queryIndex += 1
+        // The old matcher greedily completed the query from every possible start.
+        // Keep those same choices for short queries, but reuse each suffix result.
+        // Bound exceptionally large text × query products to one greedy pass
+        // (without losing matches). Ordinary long queries still keep exact ranks.
+        if queryCharacters.count > 64 &&
+            textCharacters.count > 4_000_000 / queryCharacters.count {
+            var next = 0
+            var first = 0
+            var last = 0
+            var wordStarts = 0
+            for index in textCharacters.indices where next < queryCharacters.count {
+                guard textCharacters[index] == queryCharacters[next] else { continue }
+                if next == 0 { first = index }
+                last = index
+                if index == 0 || !textCharacters[index - 1].isLetterOrNumber {
+                    wordStarts += 1
                 }
-                textIndex += 1
+                next += 1
             }
+            guard next == queryCharacters.count else { return nil }
+            let span = last - first + 1
+            return MatchRank(matchKind: 1, wordStarts: wordStarts,
+                             span: span, gaps: span - queryCharacters.count, start: first)
+        }
 
-            guard queryIndex == queryCharacters.count, let end = positions.last else { continue }
-            let span = end - start + 1
-            let candidate = MatchRank(
-                matchKind: 1,
-                wordStarts: wordStartCount(in: textCharacters, positions: positions),
-                span: span,
-                gaps: span - queryCharacters.count,
-                start: start
-            )
+        // At each position, suffix[j] describes the greedy completion of query[j...]
+        // starting at the first available character to its right. Updating j in
+        // ascending order ensures repeated query characters use the prior suffix.
+        var suffix = [(end: Int, wordStarts: Int)?](
+            repeating: nil, count: queryCharacters.count
+        )
+        var best: MatchRank?
+        for index in textCharacters.indices.reversed() {
+            let isWordStart = index == 0 || !textCharacters[index - 1].isLetterOrNumber
+            for j in queryCharacters.indices where textCharacters[index] == queryCharacters[j] {
+                if j == queryCharacters.count - 1 {
+                    suffix[j] = (index, isWordStart ? 1 : 0)
+                } else if let remainder = suffix[j + 1] {
+                    suffix[j] = (remainder.end, remainder.wordStarts + (isWordStart ? 1 : 0))
+                } else {
+                    suffix[j] = nil
+                }
+            }
+            guard textCharacters[index] == queryCharacters[0], let match = suffix[0] else {
+                continue
+            }
+            let span = match.end - index + 1
+            let candidate = MatchRank(matchKind: 1, wordStarts: match.wordStarts,
+                                      span: span, gaps: span - queryCharacters.count, start: index)
             if best == nil || candidate > best! { best = candidate }
         }
         return best
@@ -122,9 +172,23 @@ enum QuickSearchQuery {
         of query: [Character], in text: [Character]
     ) -> Range<Int>? {
         guard query.count <= text.count else { return nil }
-        for start in 0...(text.count - query.count) {
-            let end = start + query.count
-            if Array(text[start..<end]) == query { return start..<end }
+        // KMP avoids rescanning a long common prefix at every text position.
+        var prefix = [Int](repeating: 0, count: query.count)
+        var matched = 0
+        for index in 1..<query.count {
+            while matched > 0 && query[index] != query[matched] {
+                matched = prefix[matched - 1]
+            }
+            if query[index] == query[matched] { matched += 1 }
+            prefix[index] = matched
+        }
+        matched = 0
+        for index in text.indices {
+            while matched > 0 && text[index] != query[matched] {
+                matched = prefix[matched - 1]
+            }
+            if text[index] == query[matched] { matched += 1 }
+            if matched == query.count { return (index + 1 - matched)..<(index + 1) }
         }
         return nil
     }
@@ -187,6 +251,7 @@ private struct QuickSearchResultRow: View {
     let isCurrent: Bool
     let onSelect: () -> Void
     @State private var preview = "Loading…"
+    @State private var sourceIcon: NSImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -212,7 +277,7 @@ private struct QuickSearchResultRow: View {
             }
 
             HStack(alignment: .top, spacing: 9) {
-                if let icon = item.sourceApplication?.applicationIcon {
+                if let icon = sourceIcon {
                     Image(nsImage: icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -255,15 +320,28 @@ private struct QuickSearchResultRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onTapGesture(perform: onSelect)
         .task(id: item.id) {
-            preview = await Task.detached(priority: .userInitiated) {
-                for content in item.contents {
-                    if let (text, _) = content.getTextChunk(offset: 0, length: 180) {
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty { return trimmed }
+            sourceIcon = nil
+            guard let bundleID = item.sourceApplication?.bundleIdentifier else { return }
+            let icon = await Task.detached(priority: .utility) {
+                SourceApplicationIconCache.shared.icon(for: bundleID)
+            }.value
+            guard !Task.isCancelled else { return }
+            sourceIcon = icon
+        }
+        .task(id: item.id) {
+            preview = "Loading…"
+            for content in item.contents {
+                if let text = await ClipboardPreviewText.chunk(for: content, length: 180) {
+                    guard !Task.isCancelled else { return }
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        preview = trimmed
+                        return
                     }
                 }
-                return ClipboardHistoryPreview.fallbackText(for: item)
-            }.value
+            }
+            guard !Task.isCancelled else { return }
+            preview = ClipboardHistoryPreview.fallbackText(for: item)
         }
     }
 }
@@ -272,18 +350,21 @@ private struct QuickSearchResultsList: View {
     let items: [ClipboardHistoryItem]
     @ObservedObject var monitor: ClipboardMonitor
     let query: String
+    let isPending: Bool
+    let onUserSelect: (ClipboardHistoryItem) -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 if items.isEmpty {
                     ContentUnavailableView(
-                        monitor.history.isEmpty ? "No Clipboard History" : "No Matches",
+                        isPending ? "Searching…" : (monitor.history.isEmpty ? "No Clipboard History" : "No Matches"),
                         systemImage: "clipboard",
                         description: Text(
-                            monitor.history.isEmpty
-                                ? "Copy something to get started."
-                                : "No results matching ‘\(query)’."
+                            isPending ? "Results are still loading."
+                                : (monitor.history.isEmpty
+                                    ? "Copy something to get started."
+                                    : "No results matching ‘\(query)’." )
                         )
                     )
                     .frame(maxWidth: .infinity, minHeight: 260)
@@ -294,7 +375,7 @@ private struct QuickSearchResultsList: View {
                                 item: item,
                                 isSelected: monitor.selectedHistoryItem?.id == item.id,
                                 isCurrent: monitor.currentItemID == item.id,
-                                onSelect: { monitor.selectHistoryItem(item) }
+                                onSelect: { onUserSelect(item) }
                             )
                             .id(item.id)
                             .accessibilityIdentifier("quick-search.history.item")
@@ -316,12 +397,418 @@ private struct QuickSearchResultsList: View {
     }
 }
 
+/// Search owns a serial lane; speculative previews and full-size detail loads
+/// cannot get ahead of indexing or a plain-text restore on that lane.
+final class RichSearchIndexer {
+    static let shared = RichSearchIndexer()
+    private let searchQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-search", qos: .userInitiated)
+    private let previewQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-preview", qos: .utility)
+    private let detailQueue = DispatchQueue(label: "com.scottopell.spaperclip.rich-detail", qos: .userInitiated)
+    private let lock = NSLock()
+    private let cache = NSCache<NSUUID, NSString>()
+    /// Queued work holds a box, not clipboard bytes. Clear History can discard
+    /// those bytes even if a preceding platform conversion has not returned.
+    private final class ContentBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var content: ClipboardContent?
+
+        init(_ content: ClipboardContent) { self.content = content }
+        func value() -> ClipboardContent? {
+            lock.lock()
+            defer { lock.unlock() }
+            return content
+        }
+        func invalidate() {
+            lock.lock()
+            content = nil
+            lock.unlock()
+        }
+    }
+    private var pendingBoxes: [UUID: [ContentBox]] = [:]
+    private var indexing: [UUID: [(String?) -> Void]] = [:]
+    private var detailing: [UUID: [(String?) -> Void]] = [:]
+    private var previewing: [UUID: [(String?) -> Void]] = [:]
+    private var generation = 0
+    private let decode: ((ClipboardContent) -> String?)?
+
+    // The injection is for blocked-parser tests; production parses HTML locally.
+    init(decode: ((ClipboardContent) -> String?)? = nil) {
+        self.decode = decode
+        cache.totalCostLimit = 16_000_000
+    }
+
+    /// Discard cached text and finish outstanding reads without retaining their results.
+    func removeAll() {
+        lock.lock()
+        generation &+= 1
+        cache.removeAllObjects()
+        for boxes in pendingBoxes.values {
+            for box in boxes { box.invalidate() }
+        }
+        pendingBoxes.removeAll()
+        let completions = Array(indexing.values.joined())
+            + Array(detailing.values.joined()) + Array(previewing.values.joined())
+        indexing.removeAll()
+        detailing.removeAll()
+        previewing.removeAll()
+        lock.unlock()
+        DispatchQueue.main.async { completions.forEach { $0(nil) } }
+    }
+
+    private func isCurrent(_ ticket: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation == ticket
+    }
+
+    private func release(_ box: ContentBox, id: UUID) {
+        lock.lock()
+        pendingBoxes[id]?.removeAll(where: { $0 === box })
+        if pendingBoxes[id]?.isEmpty == true { pendingBoxes.removeValue(forKey: id) }
+        lock.unlock()
+    }
+
+    private func deliver(_ text: String?, to completions: [(String?) -> Void],
+                         generation ticket: Int) {
+        DispatchQueue.main.async {
+            self.lock.lock()
+            let valid = self.generation == ticket
+            self.lock.unlock()
+            completions.forEach { $0(valid ? text : nil) }
+        }
+    }
+
+    /// Search is limited to 500 KB. Explicit full-size reads use another lane.
+    func index(_ content: ClipboardContent, allowLarge: Bool = false,
+               completion: @escaping (String?) -> Void) {
+        if content.usesLocalHTMLText && content.data.count > LocalHTMLText.maximumImportBytes {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        if !allowLarge && content.usesLocalHTMLText && content.data.count >= 500_000 {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        lock.lock()
+        let ticket = generation
+        if let cached = cache.object(forKey: content.id as NSUUID) {
+            lock.unlock()
+            deliver(cached as String, to: [completion], generation: ticket)
+            return
+        }
+        if allowLarge, content.data.count < 500_000, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if allowLarge, detailing[content.id] != nil {
+            detailing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if !allowLarge, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        let id = content.id
+        let box = ContentBox(content)
+        pendingBoxes[id, default: []].append(box)
+        if allowLarge {
+            detailing[id] = [completion]
+        } else {
+            indexing[id] = [completion]
+        }
+        lock.unlock()
+
+        let work = {
+            defer { self.release(box, id: id) }
+            guard self.isCurrent(ticket), let captured = box.value() else { return }
+            let text = self.decoded(captured)
+            self.lock.lock()
+            guard self.generation == ticket else {
+                self.lock.unlock()
+                return
+            }
+            if let text, text.utf8.count <= self.cache.totalCostLimit {
+                self.cache.setObject(text as NSString, forKey: id as NSUUID,
+                                     cost: text.utf8.count)
+            }
+            let completions: [(String?) -> Void]
+            if allowLarge {
+                completions = self.detailing.removeValue(forKey: id) ?? []
+            } else {
+                completions = self.indexing.removeValue(forKey: id) ?? []
+            }
+            self.lock.unlock()
+            self.deliver(text, to: completions, generation: ticket)
+        }
+        if allowLarge {
+            detailQueue.async(execute: work)
+        } else {
+            searchQueue.async(execute: work)
+        }
+    }
+
+    /// A preview can join an active search, but search never joins a preview.
+    func preview(_ content: ClipboardContent, completion: @escaping (String?) -> Void) {
+        if content.usesLocalHTMLText && content.data.count > LocalHTMLText.maximumImportBytes {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        lock.lock()
+        let ticket = generation
+        if let cached = cache.object(forKey: content.id as NSUUID) {
+            lock.unlock()
+            deliver(cached as String, to: [completion], generation: ticket)
+            return
+        }
+        if content.data.count < 500_000, indexing[content.id] != nil {
+            indexing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if detailing[content.id] != nil {
+            detailing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        if previewing[content.id] != nil {
+            previewing[content.id]!.append(completion)
+            lock.unlock()
+            return
+        }
+        let id = content.id
+        let box = ContentBox(content)
+        pendingBoxes[id, default: []].append(box)
+        previewing[id] = [completion]
+        lock.unlock()
+        previewQueue.async {
+            defer { self.release(box, id: id) }
+            guard self.isCurrent(ticket), let captured = box.value() else { return }
+            let text = self.decoded(captured)
+            self.lock.lock()
+            guard self.generation == ticket else {
+                self.lock.unlock()
+                return
+            }
+            if let text, text.utf8.count <= self.cache.totalCostLimit {
+                self.cache.setObject(text as NSString, forKey: id as NSUUID,
+                                     cost: text.utf8.count)
+            }
+            let completions = self.previewing.removeValue(forKey: id) ?? []
+            self.lock.unlock()
+            self.deliver(text, to: completions, generation: ticket)
+        }
+    }
+
+    private func decoded(_ content: ClipboardContent) -> String? {
+        if let decode { return decode(content) }
+        if content.usesLocalHTMLText { return LocalHTMLText.decode(content.data) }
+        return content.searchableText()
+    }
+}
+
+enum ClipboardPreviewText {
+    static func chunk(for content: ClipboardContent, length: Int) async -> String? {
+        if content.usesLocalHTMLText {
+            let text: String? = await withCheckedContinuation { continuation in
+                RichSearchIndexer.shared.preview(content) { continuation.resume(returning: $0) }
+            }
+            return text.map { String($0.prefix(length)) }
+        }
+        return await Task.detached(priority: .userInitiated) {
+            content.getTextChunk(offset: 0, length: length)?.text
+        }.value
+    }
+}
+
+enum QuickSearchWorker {
+    private static let queue = DispatchQueue(label: "com.scottopell.spaperclip.query", qos: .userInitiated)
+    private static let lock = NSLock()
+    private static var generation = 0
+
+    static func invalidate() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        generation &+= 1
+        return generation
+    }
+
+    private static func isStale(_ ticket: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation != ticket
+    }
+
+    static func results(in history: [ClipboardHistoryItem], query: String,
+                        richText: [UUID: String], ticket: Int) async -> [ClipboardHistoryItem] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let result = isStale(ticket) ? [] : QuickSearchQuery.results(
+                    in: history, matching: query, indexedRichText: richText,
+                    shouldCancel: { isStale(ticket) })
+                continuation.resume(returning: result)
+            }
+        }
+    }
+}
+
+enum ClipboardRestorePrecondition {
+    static func isSafe(to pasteboard: NSPasteboard, expectedChangeCount: Int,
+                       capturePending: Bool, captureIncomplete: Bool) -> Bool {
+        pasteboard.changeCount == expectedChangeCount && !capturePending && !captureIncomplete
+    }
+}
+
+enum PlainRestoreWorker {
+    private static let localQueue = DispatchQueue(
+        label: "com.scottopell.spaperclip.local-plain-restore", qos: .userInitiated)
+    // A stuck platform conversion must not poison every future Shift-Return.
+    // Bound simultaneous work; cancellation releases the caller immediately.
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.scottopell.spaperclip.plain-restore"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 2
+        return queue
+    }()
+
+    // Continuation and cancellation state are always accessed under lock.
+    private final class Request: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<String?, Never>?
+        private var operation: Operation?
+        private var cancelled = false
+
+        func start(_ continuation: CheckedContinuation<String?, Never>, operation: Operation) -> Bool {
+            lock.lock()
+            if cancelled {
+                lock.unlock()
+                continuation.resume(returning: nil)
+                return false
+            }
+            self.continuation = continuation
+            self.operation = operation
+            lock.unlock()
+            return true
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+
+        func complete(_ result: String?) {
+            lock.lock()
+            let waiting = continuation
+            continuation = nil
+            operation = nil
+            lock.unlock()
+            waiting?.resume(returning: result)
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let waiting = continuation
+            continuation = nil
+            let running = operation
+            operation = nil
+            lock.unlock()
+            running?.cancel()
+            waiting?.resume(returning: nil)
+        }
+    }
+
+    static func text(from item: ClipboardHistoryItem) async -> String? {
+        // An explicit plain-text representation takes priority even if HTML was
+        // captured first. Never route HTML through AppKit's synchronous importer.
+        if let plain = item.contents.first(where: { content in
+            content.formats.contains(where: {
+                $0.uti == "public.utf8-plain-text" || $0.uti == "public.plain-text"
+            })
+        }), let text = await text(from: plain) { return text }
+        for content in item.contents {
+            if Task.isCancelled { return nil }
+            if let text = await text(from: content) { return text }
+        }
+        return nil
+    }
+
+    static func text(from content: ClipboardContent,
+                     decode: @escaping (ClipboardContent) -> String? = { $0.searchableText() }) async -> String? {
+        if content.usesLocalHTMLText && content.data.count < 500_000 {
+            return await withCheckedContinuation { continuation in
+                RichSearchIndexer.shared.index(content) { text in
+                    continuation.resume(returning: text)
+                }
+            }
+        }
+        if content.usesLocalHTMLText || !content.decodesRichSearchText {
+            // Plain text, URLs, and offline HTML must not queue behind RTF's
+            // platform importer, which cannot be interrupted mid-conversion.
+            return await withCheckedContinuation { continuation in
+                localQueue.async {
+                    continuation.resume(returning: content.usesLocalHTMLText
+                        ? LocalHTMLText.decode(content.data) : decode(content))
+                }
+            }
+        }
+        // A pair of uninterruptible RTF conversions can occupy both workers.
+        // Reject more requests instead of leaving the user waiting indefinitely.
+        guard queue.operationCount < 2 else { return nil }
+        let request = Request()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak request] in
+                    guard let request, !request.isCancelled else { return }
+                    request.complete(decode(content))
+                }
+                if request.start(continuation, operation: operation) {
+                    queue.addOperation(operation)
+                }
+            }
+        } onCancel: {
+            request.cancel()
+        }
+    }
+}
+
+enum QuickSearchPlainRestoreSelection {
+    static func invalidates(activeItemID: UUID?, selectedItemID: UUID?) -> Bool {
+        activeItemID != nil && activeItemID != selectedItemID
+    }
+
+    static func invalidatesRefresh(activeItemID: UUID?, queryChanged: Bool,
+                                   liveItemIDs: Set<UUID>) -> Bool {
+        guard let activeItemID else { return false }
+        return queryChanged || !liveItemIDs.contains(activeItemID)
+    }
+}
+
 struct QuickSearchView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @ObservedObject var manager: QuickSearchManager
     @State private var searchText: String = ""
     @State private var filteredHistory: [ClipboardHistoryItem] = []
     @State private var restoreError: String?
+    @State private var searching = false
+    @State private var pendingRichText = false
+    @State private var searchTask: Task<Void, Never>?
+    @State private var richIndex: [UUID: String] = [:]
+    @State private var richIndexing: Set<UUID> = []
+    @State private var richIndexed: Set<UUID> = []
+    @State private var restoreTask: Task<Void, Never>?
+    @State private var isPreparingPlainText = false
+    @State private var restoreGeneration = 0
+    @State private var preparingPlainTextItemID: UUID?
+    @State private var queryGeneration = 0
+    @State private var lastAppliedQuery: String?
+    @State private var queuedRestore: (generation: Int, plainTextOnly: Bool)?
+    @State private var explicitSelectionID: UUID?
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -379,7 +866,15 @@ struct QuickSearchView: View {
                 QuickSearchResultsList(
                     items: filteredHistory,
                     monitor: monitor,
-                    query: searchText
+                    query: searchText,
+                    isPending: searching || pendingRichText || monitor.isCapturingHistory
+                        || monitor.captureIncomplete,
+                    onUserSelect: { item in
+                        queuedRestore = nil
+                        selectionChanged(to: item.id)
+                        explicitSelectionID = item.id
+                        monitor.selectHistoryItem(item)
+                    }
                 )
                 .frame(minWidth: 260, idealWidth: 320, maxWidth: 390)
 
@@ -391,6 +886,19 @@ struct QuickSearchView: View {
             }
             .padding([.horizontal, .bottom], 16)
             .padding(.top, 10)
+
+            if searching || pendingRichText || monitor.isCapturingHistory || monitor.captureIncomplete {
+                Text(monitor.captureIncomplete
+                    ? "Clipboard capture failed; previous history is unchanged. Copy again to retry."
+                    : (monitor.isCapturingHistory ? "Capturing clipboard…"
+                        : (searching ? "Searching…"
+                            : "Indexing rich text… Results may be incomplete.")))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .accessibilityIdentifier("quick-search.pending")
+            }
 
             if let restoreError {
                 Label(restoreError, systemImage: "exclamationmark.triangle.fill")
@@ -424,9 +932,28 @@ struct QuickSearchView: View {
         )
         .frame(minWidth: 820, minHeight: 500)
         .onChange(of: monitor.history) { _, _ in
-            applyQuery(searchText)
+            applyQuery(searchText, preserveSelection: true)
+        }
+        .onChange(of: monitor.selectedHistoryItem?.id) { oldID, selectedID in
+            guard oldID != selectedID else { return }
+            guard selectedID == monitor.selectedHistoryItem?.id else { return }
+            selectionChanged(to: selectedID)
+        }
+        .onChange(of: manager.isQuickSearchVisible) { _, visible in
+            if !visible {
+                queryGeneration &+= 1
+                queuedRestore = nil
+                explicitSelectionID = nil
+                _ = QuickSearchWorker.invalidate()
+                searchTask?.cancel()
+                restoreTask?.cancel()
+                restoreGeneration &+= 1
+                isPreparingPlainText = false
+                preparingPlainTextItemID = nil
+            }
         }
         .task(id: manager.presentationID) {
+            explicitSelectionID = nil
             if searchText.isEmpty {
                 applyQuery("")
             } else {
@@ -442,40 +969,214 @@ struct QuickSearchView: View {
         }
     }
 
-    private func applyQuery(_ query: String) {
+    private func applyQuery(_ query: String, preserveSelection: Bool = false) {
+        let history = monitor.history
+        let queryChanged = !preserveSelection || lastAppliedQuery != query
+        lastAppliedQuery = query
+        if !preserveSelection { explicitSelectionID = nil }
+        if QuickSearchPlainRestoreSelection.invalidatesRefresh(
+            activeItemID: preparingPlainTextItemID, queryChanged: queryChanged,
+            liveItemIDs: Set(history.map(\.id))
+        ) {
+            cancelPlainRestore()
+        }
+        if !isPreparingPlainText { restoreError = nil }
+        queuedRestore = nil
+        searchTask?.cancel()
+        let ticket = QuickSearchWorker.invalidate()
+        queryGeneration &+= 1
+        let generation = queryGeneration
+        let liveIDs = Set(history.flatMap(\.contents).map(\.id))
+        richIndex = richIndex.filter { liveIDs.contains($0.key) }
+        richIndexed.formIntersection(liveIDs)
+        if query.isEmpty {
+            searching = false
+            pendingRichText = false
+            publishResults(history, query: query, preserveSelection: preserveSelection)
+            return
+        }
+
+        // Rich text extraction may be slow. Its own serial worker indexes one
+        // representation at a time; ordinary text queries never wait for it.
+        let richContents = history.flatMap(\.contents).filter(\.decodesRichSearchText)
+        pendingRichText = richContents.contains { !richIndexed.contains($0.id) }
+        if richIndexing.isEmpty,
+           let content = richContents.first(where: { !richIndexed.contains($0.id) }) {
+            richIndexing.insert(content.id)
+            RichSearchIndexer.shared.index(content) { text in
+                richIndexing.remove(content.id)
+                guard monitor.history.contains(where: {
+                    $0.contents.contains(where: { $0.id == content.id })
+                }) else {
+                    // The removed item no longer holds the only indexing slot.
+                    // Start work on any rich item captured while it was blocked.
+                    if manager.isQuickSearchVisible {
+                        applyQuery(searchText, preserveSelection: true)
+                    }
+                    return
+                }
+                richIndexed.insert(content.id)
+                if let text { richIndex[content.id] = text }
+                if manager.isQuickSearchVisible { applyQuery(searchText, preserveSelection: true) }
+            }
+        }
+        searching = true
+        if !preserveSelection {
+            filteredHistory = []
+            monitor.selectHistoryItem(nil)
+        }
+        let indexed = richIndex
+        searchTask = Task {
+            let result = await QuickSearchWorker.results(in: history, query: query,
+                richText: indexed, ticket: ticket)
+            guard !Task.isCancelled, generation == queryGeneration,
+                  manager.isQuickSearchVisible else { return }
+            searching = false
+            publishResults(result, query: query, preserveSelection: preserveSelection)
+            if let queued = queuedRestore, queued.generation == generation {
+                queuedRestore = nil
+                _ = restoreSelection(plainTextOnly: queued.plainTextOnly)
+            }
+        }
+    }
+
+    private func publishResults(_ result: [ClipboardHistoryItem], query: String,
+                                preserveSelection: Bool) {
+        filteredHistory = result
+        // A result refresh may reorder or temporarily omit an item while rich text
+        // is indexing. Only an explicit query/selection change or removal cancels its restore.
+        if isPreparingPlainText, let activeID = preparingPlainTextItemID,
+           let active = monitor.history.first(where: { $0.id == activeID }) {
+            monitor.selectHistoryItem(active)
+            return
+        }
+        let preferredID = preserveSelection
+            ? (explicitSelectionID ?? monitor.selectedHistoryItem?.id) : nil
+        monitor.selectHistoryItem(QuickSearchQuery.selection(
+            from: result, preferredID: preferredID,
+            currentItemID: monitor.currentItemID, query: query))
+    }
+
+    private func selectionChanged(to selectedID: UUID?) {
+        guard QuickSearchPlainRestoreSelection.invalidates(
+            activeItemID: preparingPlainTextItemID, selectedItemID: selectedID
+        ) else {
+            if !isPreparingPlainText { restoreError = nil }
+            return
+        }
+        cancelPlainRestore()
         restoreError = nil
-        filteredHistory = QuickSearchQuery.results(
-            in: monitor.history, matching: query
-        )
-        monitor.selectHistoryItem(
-            QuickSearchQuery.initialSelection(
-                from: filteredHistory,
-                currentItemID: monitor.currentItemID,
-                query: query
-            )
-        )
+    }
+
+    private func cancelPlainRestore() {
+        restoreTask?.cancel()
+        restoreTask = nil
+        restoreGeneration &+= 1
+        preparingPlainTextItemID = nil
+        isPreparingPlainText = false
     }
 
     private func moveSelection(by offset: Int) -> KeyPress.Result {
         guard !filteredHistory.isEmpty else { return .handled }
-        restoreError = nil
+        queuedRestore = nil
 
         let currentIndex = monitor.selectedHistoryItem.flatMap { selected in
             filteredHistory.firstIndex(where: { $0.id == selected.id })
         } ?? 0
         let nextIndex = min(max(currentIndex + offset, 0), filteredHistory.count - 1)
-        monitor.selectHistoryItem(filteredHistory[nextIndex])
+        let next = filteredHistory[nextIndex]
+        if monitor.selectedHistoryItem?.id != next.id {
+            selectionChanged(to: next.id)
+        } else {
+            restoreError = nil
+        }
+        explicitSelectionID = next.id
+        monitor.selectHistoryItem(next)
         return .handled
     }
 
-    private func restoreSelection() -> KeyPress.Result {
+    private func restoreSelection(plainTextOnly override: Bool? = nil) -> KeyPress.Result {
+        // Recheck the change count even if the polling timer has not fired yet.
+        monitor.reconcileCurrentPasteboard()
+        guard !monitor.isCapturingHistory, !monitor.captureIncomplete else {
+            queuedRestore = nil
+            restoreError = monitor.captureIncomplete
+                ? "Clipboard capture failed. Copy again before restoring history."
+                : "Wait for clipboard capture before pasting."
+            return .handled
+        }
+        let plainTextOnly = override ?? NSEvent.modifierFlags.contains(.shift)
+        if searching {
+            if pendingRichText {
+                restoreError = "Rich text is still indexing. Press Return again to choose a shown result."
+            } else {
+                queuedRestore = (queryGeneration, plainTextOnly)
+            }
+            return .handled
+        }
         guard let selected = monitor.selectedHistoryItem,
             filteredHistory.contains(where: { $0.id == selected.id })
         else {
             return .handled
         }
 
-        let plainTextOnly = NSEvent.modifierFlags.contains(.shift)
+        if plainTextOnly {
+            if let plain = selected.contents.first(where: { content in
+                content.formats.contains(where: {
+                    $0.uti == "public.utf8-plain-text" || $0.uti == "public.plain-text"
+                })
+            }), plain.data.count < 100_000 {
+                guard monitor.copyPlainTextOnly(selected) else {
+                    restoreError = "This item has no plain-text representation."
+                    return .handled
+                }
+                restoreError = manager.pasteIntoInvokingApplication()
+                return .handled
+            }
+            guard !isPreparingPlainText else { return .handled }
+            let session = manager.presentationID
+            let query = searchText
+            let clipboardChangeCount = NSPasteboard.general.changeCount
+            restoreGeneration &+= 1
+            let generation = restoreGeneration
+            isPreparingPlainText = true
+            restoreError = "Preparing plain text…"
+            preparingPlainTextItemID = selected.id
+            restoreTask = Task {
+                let text = await PlainRestoreWorker.text(from: selected)
+                guard generation == restoreGeneration else { return }
+                isPreparingPlainText = false
+                preparingPlainTextItemID = nil
+                guard !Task.isCancelled, manager.isQuickSearchVisible,
+                      manager.presentationID == session, searchText == query,
+                      monitor.selectedHistoryItem?.id == selected.id,
+                      monitor.history.contains(where: { $0.id == selected.id }) else { return }
+                guard let text else {
+                    restoreError = selected.contents.contains(where: {
+                        $0.usesLocalHTMLText && $0.data.count > LocalHTMLText.maximumImportBytes
+                    }) ? "HTML is too large to convert. Return restores its original formats."
+                        : "Plain-text conversion is unavailable. Return restores original formats."
+                    return
+                }
+                let board = NSPasteboard.general
+                guard ClipboardRestorePrecondition.isSafe(to: board,
+                    expectedChangeCount: clipboardChangeCount,
+                    capturePending: monitor.isCapturingHistory,
+                    captureIncomplete: monitor.captureIncomplete) else {
+                    monitor.reconcileCurrentPasteboard()
+                    restoreError = "Clipboard changed while preparing plain text. Try again."
+                    return
+                }
+                board.clearContents()
+                guard board.setString(text, forType: .string) else {
+                    restoreError = "Plain text could not be written to the clipboard."
+                    return
+                }
+                monitor.promoteRestoredItem(selected)
+                restoreError = manager.pasteIntoInvokingApplication()
+            }
+            return .handled
+        }
         let copied = plainTextOnly
             ? monitor.copyPlainTextOnly(selected)
             : monitor.copyAllContentTypes(selected)

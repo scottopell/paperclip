@@ -112,6 +112,18 @@ struct LazyTextView: NSViewRepresentable {
         textView.string = "Loading content..."
 
         let content = content
+        if content.usesLocalHTMLText {
+            guard content.data.count <= LocalHTMLText.maximumImportBytes else {
+                textView.string = "HTML preview unavailable above 2 MB. Original clipboard data is unchanged."
+                return
+            }
+            RichSearchIndexer.shared.index(content, allowLarge: true) {
+                [weak textView, weak coordinator] text in
+                guard let coordinator, coordinator.loader.shouldApply(token) else { return }
+                textView?.string = text ?? "Unable to display text content."
+            }
+            return
+        }
         let loadingTask = DispatchWorkItem { [weak textView, weak coordinator] in
             let text = content.textForDisplay()
             guard let coordinator, coordinator.loader.shouldApply(token) else { return }

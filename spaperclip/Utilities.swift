@@ -73,79 +73,114 @@ enum Utilities {
         return str
     }
 
+    /// Check ownership at the commit boundary, after any conversion or staging.
+    private static func replacePasteboard(
+        _ pasteboard: NSPasteboard,
+        expectedChangeCount: Int?,
+        write: () -> Bool
+    ) -> Bool {
+        guard expectedChangeCount == nil || pasteboard.changeCount == expectedChangeCount else {
+            return false
+        }
+        pasteboard.clearContents()
+        return write()
+    }
+
     /// Copies exactly one representation from a content group to a pasteboard.
     @discardableResult
     static func copy(
         _ format: ClipboardFormat,
         from content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
         guard content.formats.contains(format) else { return false }
-        pasteboard.clearContents()
-        return pasteboard.setData(
-            content.data,
-            forType: NSPasteboard.PasteboardType(format.uti)
-        )
+        let type = NSPasteboard.PasteboardType(format.uti)
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            pasteboard.setData(content.data, forType: type)
+                && pasteboard.data(forType: type) == content.data
+        }
     }
 
     /// Copies every representation in one content group to a pasteboard.
     @discardableResult
     static func copy(
         _ content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        pasteboard.clearContents()
-
-        var copiedAnyContent = false
-        for format in content.formats {
-            copiedAnyContent = pasteboard.setData(
-                content.data,
-                forType: NSPasteboard.PasteboardType(format.uti)
-            ) || copiedAnyContent
+        guard !content.formats.isEmpty else { return false }
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            for format in content.formats {
+                guard pasteboard.setData(content.data, forType: .init(format.uti)) else { return false }
+            }
+            return content.formats.allSatisfy {
+                pasteboard.data(forType: .init($0.uti)) == content.data
+            }
         }
-        return copiedAnyContent
     }
 
     /// Copies all content types from a clipboard history item to a pasteboard.
     @discardableResult
     static func copyAllContentTypes(
         from item: ClipboardHistoryItem,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        guard item.contents.contains(where: { !$0.formats.isEmpty }) else { return false }
-        pasteboard.clearContents()
-
-        var copiedAnyContent = false
+        let staged = NSPasteboardItem()
+        var representations: [NSPasteboard.PasteboardType: Data] = [:]
         for content in item.contents {
             for format in content.formats {
-                copiedAnyContent = pasteboard.setData(
-                    content.data,
-                    forType: NSPasteboard.PasteboardType(format.uti)
-                ) || copiedAnyContent
+                let type = NSPasteboard.PasteboardType(format.uti)
+                // One pasteboard item cannot hold two different values for the same type.
+                guard representations[type] == nil || representations[type] == content.data else {
+                    return false
+                }
+                representations[type] = content.data
+                guard staged.setData(content.data, forType: type) else { return false }
             }
         }
-        return copiedAnyContent
+        guard !representations.isEmpty else { return false }
+
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            guard pasteboard.writeObjects([staged]) else { return false }
+            // A partial write must not be reported as a successful restore.
+            return representations.allSatisfy { entry in
+                pasteboard.data(forType: entry.key) == entry.value
+            }
+        }
     }
 
     @discardableResult
     static func copyPlainText(
         from item: ClipboardHistoryItem,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        guard let text = item.contents.lazy.compactMap({ $0.searchableText() }).first else {
-            return false
+        guard let text = plainText(from: item) else { return false }
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
+            pasteboard.setString(text, forType: .string)
         }
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
+    }
+
+    static func plainText(from item: ClipboardHistoryItem) -> String? {
+        // Prefer an actual text representation, even when HTML or RTF appears first.
+        // Importing HTML through AppKit can synchronously block the UI thread.
+        let plainText = item.contents.first(where: { content in
+            content.formats.contains { format in
+                format.uti == "public.utf8-plain-text" || format.uti == "public.plain-text"
+            }
+        })?.searchableText()
+        return plainText ?? item.contents.lazy.compactMap({ $0.searchableText() }).first
     }
 
     @discardableResult
     static func copyToClipboard(
         _ content: ClipboardContent,
-        to pasteboard: NSPasteboard = .general
+        to pasteboard: NSPasteboard = .general,
+        expectedChangeCount: Int? = nil
     ) -> Bool {
-        guard !content.formats.isEmpty else { return false }
-        return copy(content, to: pasteboard)
+        return copy(content, to: pasteboard, expectedChangeCount: expectedChangeCount)
     }
 }
 
