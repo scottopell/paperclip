@@ -508,6 +508,59 @@ struct HistoryListView: View {
         selectItem(firstItem)
     }
 
+    private var historyScrollView: some View {
+        // Always show the ScrollView container regardless of content
+        ScrollView {
+            if filteredHistory.isEmpty {
+                VStack {
+                    if searching || pendingRichText || queryIsDebouncing {
+                        Text(pendingRichText && !queryIsDebouncing
+                             ? "Searching… Rich text is still indexing." : "Searching…")
+                            .foregroundColor(.secondary)
+                    } else if monitor.history.isEmpty {
+                        Text("No clipboard history yet. Copy something!")
+                            .accessibilityIdentifier("\(accessibilityPrefix).empty-state")
+                            .italic()
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        let displaySearchText =
+                            !showSearchBar && externalSearchText != nil
+                            ? externalSearchText!
+                            : debouncedSearchText
+                        Text("No results matching '\(displaySearchText)'")
+                            .italic()
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 100)
+                .padding(4)
+            } else {
+                LazyVStack(spacing: 4) {
+                    ForEach(Array(filteredHistory.enumerated()), id: \.element.id) {
+                        index, item in
+                        HistoryItemRow(item: item, monitor: monitor)
+                            .accessibilityIdentifier("\(accessibilityPrefix).history.item")
+                            .contentShape(Rectangle())
+                            .background(
+                                monitor.selectedHistoryItem?.id == item.id
+                                    ? Color.accentColor.opacity(0.2) : Color.clear
+                            )
+                            .cornerRadius(4)
+                            .onTapGesture {
+                                selectItem(item)
+                            }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+        .accessibilityIdentifier("\(accessibilityPrefix).history")
+        .cornerRadius(6)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // Search field - always at the top
@@ -550,56 +603,7 @@ struct HistoryListView: View {
                     .foregroundColor(restoreError == nil ? Color.secondary : Color.orange)
             }
 
-            // Always show the ScrollView container regardless of content
-            ScrollView {
-                if filteredHistory.isEmpty {
-                    VStack {
-                        if searching || pendingRichText || queryIsDebouncing {
-                            Text(pendingRichText && !queryIsDebouncing
-                                 ? "Searching… Rich text is still indexing." : "Searching…")
-                                .foregroundColor(.secondary)
-                        } else if monitor.history.isEmpty {
-                            Text("No clipboard history yet. Copy something!")
-                                .accessibilityIdentifier("\(accessibilityPrefix).empty-state")
-                                .italic()
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            let displaySearchText =
-                                !showSearchBar && externalSearchText != nil
-                                ? externalSearchText!
-                                : debouncedSearchText
-                            Text("No results matching '\(displaySearchText)'")
-                                .italic()
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 100)
-                    .padding(4)
-                } else {
-                    LazyVStack(spacing: 4) {
-                        ForEach(Array(filteredHistory.enumerated()), id: \.element.id) {
-                            index, item in
-                            HistoryItemRow(item: item, monitor: monitor)
-                                .accessibilityIdentifier("\(accessibilityPrefix).history.item")
-                                .contentShape(Rectangle())
-                                .background(
-                                    monitor.selectedHistoryItem?.id == item.id
-                                        ? Color.accentColor.opacity(0.2) : Color.clear
-                                )
-                                .cornerRadius(4)
-                                .onTapGesture {
-                                    selectItem(item)
-                                }
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-            .background(Color(NSColor.textBackgroundColor).opacity(0.3))
-            .accessibilityIdentifier("\(accessibilityPrefix).history")
-            .cornerRadius(6)
+            historyScrollView
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)  // Align to top
         .padding(4)
@@ -653,10 +657,14 @@ struct HistoryListView: View {
             }
             return .ignored
         }
-        .onKeyPress(.return) { restoreSelectedItem() }
+        .onKeyPress(.return, phases: [.down], action: handleReturnKey)
     }
 
-    private func restoreSelectedItem() -> KeyPress.Result {
+    private func handleReturnKey(_ keyPress: KeyPress) -> KeyPress.Result {
+        restoreSelectedItem(plainTextOnly: keyPress.modifiers.contains(.shift))
+    }
+
+    private func restoreSelectedItem(plainTextOnly: Bool) -> KeyPress.Result {
         monitor.reconcileCurrentPasteboard()
         guard !monitor.isCapturingHistory, !monitor.captureIncomplete else {
             restoreError = monitor.captureIncomplete
@@ -670,7 +678,7 @@ struct HistoryListView: View {
             return .handled
         }
 
-        if NSEvent.modifierFlags.contains(.shift) {
+        if plainTextOnly {
             guard !plainRestore.isPending else { return .handled }
             if let plain = item.contents.first(where: { content in
                 content.formats.contains(where: {
@@ -721,7 +729,8 @@ struct HistoryListView: View {
                 restoreError = nil
                 onItemCopied()
             } else {
-                restoreError = "This item could not be written to the clipboard."
+                restoreError = monitor.lastRestoreFailure?.message
+                    ?? "This item could not be written to the clipboard."
             }
         }
         return .handled

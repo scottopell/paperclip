@@ -2,6 +2,24 @@ import AppKit
 import Foundation
 import SwiftUI
 
+enum ClipboardWriteFailure: String, Equatable {
+    case conflictingFormats
+    case noFormats
+    case clipboardChanged
+    case writeRejected
+    case verificationFailed
+
+    var message: String {
+        switch self {
+        case .conflictingFormats: "This item has conflicting saved formats. Clipboard was not changed."
+        case .noFormats: "This history item has no saved formats."
+        case .clipboardChanged: "Clipboard changed while preparing this item. Try again."
+        case .writeRejected: "Clipboard write was rejected; some formats may have changed. Automatic paste was canceled."
+        case .verificationFailed: "Clipboard formats could not be verified. Automatic paste was canceled."
+        }
+    }
+}
+
 /// Contains common utility functions used throughout the application
 enum Utilities {
     private static let timestampFormatter: DateFormatter = {
@@ -77,9 +95,11 @@ enum Utilities {
     private static func replacePasteboard(
         _ pasteboard: NSPasteboard,
         expectedChangeCount: Int?,
+        onStale: (() -> Void)? = nil,
         write: () -> Bool
     ) -> Bool {
         guard expectedChangeCount == nil || pasteboard.changeCount == expectedChangeCount else {
+            onStale?()
             return false
         }
         pasteboard.clearContents()
@@ -125,29 +145,44 @@ enum Utilities {
     static func copyAllContentTypes(
         from item: ClipboardHistoryItem,
         to pasteboard: NSPasteboard = .general,
-        expectedChangeCount: Int? = nil
+        expectedChangeCount: Int? = nil,
+        onFailure: ((ClipboardWriteFailure) -> Void)? = nil
     ) -> Bool {
-        let staged = NSPasteboardItem()
         var representations: [NSPasteboard.PasteboardType: Data] = [:]
         for content in item.contents {
             for format in content.formats {
                 let type = NSPasteboard.PasteboardType(format.uti)
                 // One pasteboard item cannot hold two different values for the same type.
                 guard representations[type] == nil || representations[type] == content.data else {
+                    onFailure?(.conflictingFormats)
                     return false
                 }
                 representations[type] = content.data
-                guard staged.setData(content.data, forType: type) else { return false }
             }
         }
-        guard !representations.isEmpty else { return false }
+        guard !representations.isEmpty else {
+            onFailure?(.noFormats)
+            return false
+        }
 
-        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount) {
-            guard pasteboard.writeObjects([staged]) else { return false }
-            // A partial write must not be reported as a successful restore.
-            return representations.allSatisfy { entry in
-                pasteboard.data(forType: entry.key) == entry.value
+        // NSPasteboardItem accepts UTIs only. Real pasteboards also advertise
+        // legacy names (for example, NSStringPboardType), which it rejects.
+        // Write the original types directly so none are silently dropped.
+        return replacePasteboard(pasteboard, expectedChangeCount: expectedChangeCount,
+            onStale: { onFailure?(.clipboardChanged) }) {
+            for (type, data) in representations {
+                guard pasteboard.setData(data, forType: type) else {
+                    onFailure?(.writeRejected)
+                    return false
+                }
             }
+            guard representations.allSatisfy({ entry in
+                pasteboard.data(forType: entry.key) == entry.value
+            }) else {
+                onFailure?(.verificationFailed)
+                return false
+            }
+            return true
         }
     }
 

@@ -739,6 +739,7 @@ class ClipboardMonitor: ObservableObject {
     @Published var isLoadingHistory: Bool = false
     @Published private(set) var isCapturingHistory = false
     @Published private(set) var captureIncomplete = false
+    @Published private(set) var lastRestoreFailure: ClipboardWriteFailure?
 
     private var timer: Timer?
     private let pasteboard: NSPasteboard
@@ -1121,12 +1122,20 @@ class ClipboardMonitor: ObservableObject {
     /// Copies all representations of a history item without recording the app's own write.
     @discardableResult
     func copyAllContentTypes(_ item: ClipboardHistoryItem) -> Bool {
-        guard canReplacePasteboard() else { return false }
+        lastRestoreFailure = nil
+        guard canReplacePasteboard() else {
+            lastRestoreFailure = .clipboardChanged
+            return false
+        }
         let pasteboard = self.pasteboard
+        var failure: ClipboardWriteFailure?
         guard Utilities.copyAllContentTypes(from: item, to: pasteboard,
-                                            expectedChangeCount: lastChangeCount) else {
+                                            expectedChangeCount: lastChangeCount,
+                                            onFailure: { failure = $0 }) else {
+            let reason = failure ?? .writeRejected
+            lastRestoreFailure = reason
             reconcileCurrentPasteboard()
-            logger.warning("Cannot copy history item: no content was written")
+            logger.warning("Cannot copy history item; stage: \(reason.rawValue, privacy: .public)")
             return false
         }
 
