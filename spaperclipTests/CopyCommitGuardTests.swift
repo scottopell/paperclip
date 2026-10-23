@@ -46,6 +46,48 @@ final class CopyCommitGuardTests: XCTestCase {
         }
     }
 
+    func testFailureStagesDoNotExposeClipboardData() {
+        let board = NSPasteboard(name: .init(UUID().uuidString))
+        defer { board.releaseGlobally() }
+        let empty = ClipboardHistoryItem(timestamp: .now, contents: [], sourceApplication: nil)
+        var failure: ClipboardWriteFailure?
+        XCTAssertFalse(Utilities.copyAllContentTypes(from: empty, to: board,
+            onFailure: { failure = $0 }))
+        XCTAssertEqual(failure, .noFormats)
+
+        let (item, _, _) = makeItem()
+        let oldCount = board.changeCount
+        board.clearContents()
+        XCTAssertTrue(board.setString("unchanged", forType: .string))
+        failure = nil
+        XCTAssertFalse(Utilities.copyAllContentTypes(from: item, to: board,
+            expectedChangeCount: oldCount, onFailure: { failure = $0 }))
+        XCTAssertEqual(failure, .clipboardChanged)
+        XCTAssertEqual(board.string(forType: .string), "unchanged")
+    }
+
+    func testAllTypesRestorePreservesLegacyPasteboardNames() {
+        let board = NSPasteboard(name: .init(UUID().uuidString))
+        defer { board.releaseGlobally() }
+        let html = Data("<p>disposable</p>".utf8)
+        let plain = Data("disposable".utf8)
+        let representations: [(String, Data)] = [
+            ("public.html", html),
+            ("Apple HTML pasteboard type", html),
+            ("public.utf8-plain-text", plain),
+            ("NSStringPboardType", plain),
+            ("org.chromium.internal.source-rfh-token", Data([1, 2, 3])),
+            ("org.chromium.source-url", Data("https://example.invalid".utf8))
+        ]
+        let item = ClipboardHistoryItem(timestamp: .now, contents: representations.map { type, data in
+            ClipboardContent(data: data, formats: [ClipboardFormat(uti: type)], description: type)
+        }, sourceApplication: nil)
+        XCTAssertTrue(Utilities.copyAllContentTypes(from: item, to: board))
+        for (type, data) in representations {
+            XCTAssertEqual(board.data(forType: .init(type)), data, "Format must survive: \(type)")
+        }
+    }
+
     func testSuccessfulCopyRetainsExactBinaryRepresentations() {
         let board = NSPasteboard(name: .init(UUID().uuidString))
         defer { board.releaseGlobally() }
@@ -76,6 +118,7 @@ final class CopyCommitGuardTests: XCTestCase {
                              formats: [ClipboardFormat(uti: textType.rawValue)], description: "two")
         ], sourceApplication: nil)
         XCTAssertFalse(monitor.copyAllContentTypes(conflicting))
+        XCTAssertEqual(monitor.lastRestoreFailure, .conflictingFormats)
         XCTAssertNil(monitor.currentItemID)
         XCTAssertTrue(monitor.history.isEmpty)
     }

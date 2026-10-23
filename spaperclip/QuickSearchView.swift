@@ -834,8 +834,8 @@ struct QuickSearchView: View {
                     .onKeyPress(.downArrow) {
                         moveSelection(by: 1)
                     }
-                    .onKeyPress(.return) {
-                        restoreSelection()
+                    .onKeyPress(.return, phases: [.down]) { keyPress in
+                        restoreSelection(plainTextOnly: keyPress.modifiers.contains(.shift))
                     }
                     .onKeyPress(.escape) {
                         manager.hideQuickSearch()
@@ -1095,7 +1095,7 @@ struct QuickSearchView: View {
         return .handled
     }
 
-    private func restoreSelection(plainTextOnly override: Bool? = nil) -> KeyPress.Result {
+    private func restoreSelection(plainTextOnly: Bool) -> KeyPress.Result {
         // Recheck the change count even if the polling timer has not fired yet.
         monitor.reconcileCurrentPasteboard()
         guard !monitor.isCapturingHistory, !monitor.captureIncomplete else {
@@ -1105,7 +1105,6 @@ struct QuickSearchView: View {
                 : "Wait for clipboard capture before pasting."
             return .handled
         }
-        let plainTextOnly = override ?? NSEvent.modifierFlags.contains(.shift)
         if searching {
             if pendingRichText {
                 restoreError = "Rich text is still indexing. Press Return again to choose a shown result."
@@ -1183,7 +1182,8 @@ struct QuickSearchView: View {
         guard copied else {
             restoreError = plainTextOnly
                 ? "This item has no plain-text representation."
-                : "This item could not be written to the clipboard."
+                : (monitor.lastRestoreFailure?.message
+                    ?? "This item could not be written to the clipboard.")
             return .handled
         }
 
