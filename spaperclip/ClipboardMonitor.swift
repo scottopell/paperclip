@@ -307,6 +307,8 @@ struct ClipboardContent: Identifiable, Hashable {
             "public.utf8-plain-text",
             "public.rtf",
             "public.html",
+            UTType.url.identifier,
+            UTType.fileURL.identifier,
         ]
         return formats.contains { textTypes.contains($0.uti) }
     }
@@ -420,7 +422,7 @@ struct ClipboardContent: Identifiable, Hashable {
         }
         // Try URL format
         else if formats.first(where: {
-            $0.uti == UTType.url.identifier || $0.uti == "public.url"
+            $0.uti == UTType.url.identifier || $0.uti == UTType.fileURL.identifier
         }) != nil {
             if let urlString = String(data: data, encoding: .utf8) {
                 let endOffset = min(offset + length, urlString.count)
@@ -458,7 +460,7 @@ struct ClipboardContent: Identifiable, Hashable {
         }
 
         if formats.contains(where: {
-            $0.uti == UTType.url.identifier || $0.uti == "public.url"
+            $0.uti == UTType.url.identifier || $0.uti == UTType.fileURL.identifier
         }) {
             return String(data: data, encoding: .utf8)
         }
@@ -552,7 +554,7 @@ struct ClipboardContent: Identifiable, Hashable {
             }
             // Try URL format
             else if formats.first(where: {
-                $0.uti == UTType.url.identifier || $0.uti == "public.url"
+                $0.uti == UTType.url.identifier || $0.uti == UTType.fileURL.identifier
             }) != nil {
                 return String(data: data, encoding: .utf8)
             }
@@ -756,7 +758,7 @@ class ClipboardMonitor: ObservableObject {
 
     // Predefined UTIs we specifically handle in order of priority
     // Other types will still be processed but with default handling
-    private let knownTypes = [
+    private static let knownTypes = [
         "public.utf8-plain-text",
         "public.rtf",
         "public.html",
@@ -920,7 +922,6 @@ class ClipboardMonitor: ObservableObject {
             currentItemID = nil
         }
         guard !captureInFlight, force || changed else { return }
-        let knownTypes = self.knownTypes
         let generation = captureGeneration
         let lastCount = lastChangeCount
         let sourceApp = NSWorkspace.shared.frontmostApplication.map {
@@ -931,8 +932,7 @@ class ClipboardMonitor: ObservableObject {
         captureQueue.async { [weak self] in
             let startCount = pasteboard.changeCount
             let captured: ClipboardHistoryItem? = (force || startCount != lastCount)
-                ? Self.updateFromClipboard(pasteboard: pasteboard, knownTypes: knownTypes,
-                                           sourceAppInfo: sourceApp)
+                ? Self.updateFromClipboard(pasteboard: pasteboard, sourceAppInfo: sourceApp)
                 : nil
             let hasAdvertisedTypes = !(pasteboard.types ?? []).isEmpty
             let endCount = pasteboard.changeCount
@@ -968,9 +968,31 @@ class ClipboardMonitor: ObservableObject {
     /// Reads every representation on the worker; a provider may block this thread.
     /// A changeCount check before and after this function guards the entire snapshot.
     private static func updateFromClipboard(
-        pasteboard: NSPasteboard, knownTypes: [String], sourceAppInfo: SourceApplicationInfo?
+        pasteboard: NSPasteboard, sourceAppInfo: SourceApplicationInfo?
     ) -> ClipboardHistoryItem? {
         guard let availableTypes = pasteboard.types else { return nil }
+        // The board-wide list includes compatibility aliases that are not item
+        // representations. Finder advertises `fndf` here but supplies no bytes.
+        // Missing actual item data still invalidates the snapshot.
+        let itemTypes = pasteboard.pasteboardItems.map {
+            Set($0.flatMap(\.types))
+        } ?? Set(availableTypes)
+        guard let contents = captureContents(
+            availableTypes: availableTypes, itemTypes: itemTypes,
+            readData: { pasteboard.data(forType: $0) }
+        ) else { return nil }
+        return ClipboardHistoryItem(
+            timestamp: Date(), contents: contents, sourceApplication: sourceAppInfo
+        )
+    }
+
+    /// Captures native representations and any readable compatibility aliases.
+    /// The caller checks pasteboard ownership around the entire read.
+    static func captureContents(
+        availableTypes: [NSPasteboard.PasteboardType],
+        itemTypes: Set<NSPasteboard.PasteboardType>,
+        readData: (NSPasteboard.PasteboardType) -> Data?
+    ) -> [ClipboardContent]? {
 
         // Content grouping strategy:
         // 1. Group identical binary data with different formats together
@@ -988,47 +1010,32 @@ class ClipboardMonitor: ObservableObject {
 
         var contentGroups: [Data: ContentGroup] = [:]
 
-        // First pass: collect all data and formats
-        for type in knownTypes {
-            if availableTypes.contains(NSPasteboard.PasteboardType(type)) {
-                guard let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type))
-                else { return nil }
-                let description =
-                    type == "public.utf8-plain-text"
+        let prioritizedTypes = knownTypes.map { NSPasteboard.PasteboardType($0) }
+            .filter { availableTypes.contains($0) }
+        let orderedTypes = prioritizedTypes + availableTypes.filter {
+            !knownTypes.contains($0.rawValue)
+        }
+        var dataOrder: [Data] = []
+        for type in orderedTypes {
+            guard let data = readData(type) else {
+                if itemTypes.contains(type) { return nil }
+                continue
+            }
+            let format = ClipboardFormat(uti: type.rawValue)
+            if let existing = contentGroups[data] {
+                existing.formats.append(format)
+            } else {
+                let description = type == .string
                     ? (String(data: data, encoding: .utf8) ?? "Unknown text data")
                     : "Binary data (\(data.count) bytes)"
-
-                let format = ClipboardFormat(uti: type)
-
-                if let existing = contentGroups[data] {
-                    existing.formats.append(format)
-                } else {
-                    contentGroups[data] = ContentGroup(description: description, format: format)
-                }
+                contentGroups[data] = ContentGroup(description: description, format: format)
+                dataOrder.append(data)
             }
         }
 
-        // Check for any other types
-        for type in availableTypes {
-            let typeString = type.rawValue
-            if !knownTypes.contains(typeString) {
-                guard let data = pasteboard.data(forType: type) else { return nil }
-                let format = ClipboardFormat(uti: typeString)
-
-                if let existing = contentGroups[data] {
-                    existing.formats.append(format)
-                } else {
-                    contentGroups[data] = ContentGroup(
-                        description: "Binary data (\(data.count) bytes)",
-                        format: format
-                    )
-                }
-            }
-        }
-
-        // Convert dictionary to array of ClipboardContent
-        let contents = contentGroups.map { (data, group) in
-            ClipboardContent(
+        let contents = dataOrder.map { data in
+            let group = contentGroups[data]!
+            return ClipboardContent(
                 data: data,
                 formats: group.formats,
                 description: group.description
@@ -1036,9 +1043,7 @@ class ClipboardMonitor: ObservableObject {
         }
 
         guard !contents.isEmpty else { return nil }
-        return ClipboardHistoryItem(
-            timestamp: Date(), contents: contents, sourceApplication: sourceAppInfo
-        )
+        return contents
     }
 
     private func markCurrent(_ item: ClipboardHistoryItem) {
