@@ -15,6 +15,36 @@ import SwiftUI
 struct LazyTextView: NSViewRepresentable {
     let content: ClipboardContent
     let isEditable: Bool
+    let maximumPreviewCharacters: Int?
+    @Binding var isPreviewTruncated: Bool
+
+    init(content: ClipboardContent, isEditable: Bool,
+         maximumPreviewCharacters: Int? = nil,
+         isPreviewTruncated: Binding<Bool> = .constant(false)) {
+        self.content = content
+        self.isEditable = isEditable
+        self.maximumPreviewCharacters = maximumPreviewCharacters
+        _isPreviewTruncated = isPreviewTruncated
+    }
+
+    /// Bound AppKit layout, not clipboard data. Even non-contiguous layout must
+    /// shape an entire paragraph before it can display the first visible lines.
+    struct Preview {
+        let text: String
+        let isTruncated: Bool
+
+        init(_ text: String, maximumCharacters: Int?) {
+            guard let maximumCharacters,
+                  let end = text.index(text.startIndex, offsetBy: maximumCharacters,
+                                       limitedBy: text.endIndex), end != text.endIndex else {
+                self.text = text
+                isTruncated = false
+                return
+            }
+            self.text = String(text[..<end])
+            isTruncated = true
+        }
+    }
 
     final class TextLoadingCoordinator: NSObject {
         private let lock = NSLock()
@@ -112,6 +142,8 @@ struct LazyTextView: NSViewRepresentable {
         textView.string = "Loading content..."
 
         let content = content
+        let maximumCharacters = maximumPreviewCharacters
+        let truncation = $isPreviewTruncated
         if content.usesLocalHTMLText {
             guard content.data.count <= LocalHTMLText.maximumImportBytes else {
                 textView.string = "HTML preview unavailable above 2 MB. Original clipboard data is unchanged."
@@ -120,17 +152,22 @@ struct LazyTextView: NSViewRepresentable {
             RichSearchIndexer.shared.index(content, allowLarge: true) {
                 [weak textView, weak coordinator] text in
                 guard let coordinator, coordinator.loader.shouldApply(token) else { return }
-                textView?.string = text ?? "Unable to display text content."
+                let preview = Preview(text ?? "Unable to display text content.",
+                                      maximumCharacters: maximumCharacters)
+                textView?.string = preview.text
+                truncation.wrappedValue = preview.isTruncated
             }
             return
         }
         let loadingTask = DispatchWorkItem { [weak textView, weak coordinator] in
-            let text = content.textForDisplay()
+            let preview = Preview(content.textForDisplay() ?? "Unable to display text content.",
+                                  maximumCharacters: maximumCharacters)
             guard let coordinator, coordinator.loader.shouldApply(token) else { return }
 
             DispatchQueue.main.async { [weak textView, weak coordinator] in
                 guard let coordinator, coordinator.loader.shouldApply(token) else { return }
-                textView?.string = text ?? "Unable to display text content."
+                textView?.string = preview.text
+                truncation.wrappedValue = preview.isTruncated
             }
         }
         coordinator.loader.install(loadingTask, for: token)

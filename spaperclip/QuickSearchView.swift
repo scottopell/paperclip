@@ -878,7 +878,7 @@ struct QuickSearchView: View {
                 )
                 .frame(minWidth: 260, idealWidth: 320, maxWidth: 390)
 
-                ClipboardDetailView(monitor: monitor)
+                ClipboardDetailView(monitor: monitor, maximumPreviewCharacters: 20_000)
                     .accessibilityIdentifier("quick-search.preview")
                     .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(NSColor.textBackgroundColor).opacity(0.18))

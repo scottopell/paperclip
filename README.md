@@ -153,6 +153,7 @@ For accessory-app changes, launch a built app and confirm that Paperclip appears
 6. Press **Escape** to dismiss without copying.
 
 Change or clear the shortcut under **Paperclip → Settings…** (`Cmd+,`). Automatic paste requires Accessibility access; if access is unavailable, Paperclip still updates the clipboard and explains why it could not paste.
+Quick Search displays up to 20,000 characters of text and labels partial previews. Clipboard History retains its full text viewer. This display limit does not change search coverage or the content restored with Enter or Shift+Enter.
 Closing Clipboard History hides its AppKit-owned window while Paperclip keeps monitoring. Use the menu-bar icon to open Clipboard History, Quick Search, Database Statistics, or quit the app.
 Printable-key shortcuts follow their character when switching keyboard layouts (for example, `S` remains `S` between US and Dvorak). After upgrading from an older build, record the shortcut once more so Paperclip can remember the intended character.
 
@@ -163,3 +164,5 @@ Printable-key shortcuts follow their character when switching keyboard layouts (
 - Large rich-text/HTML values may have limited previews even though their pasteboard data is retained.
 - The app is not configured to launch at login.
 - Signed and notarized ZIP releases require the repository's Apple credentials; DMG packaging and automatic updates are intentionally not included.
+
+For large-text acceptance, copy an HTML item containing a roughly 1 MB paragraph, invoke Quick Search from another app, type a query, and navigate between results with the arrow keys. Confirm input remains responsive and the partial-preview label appears. Verify Enter restores the original formats, Shift+Enter restores the complete plain text, and Clipboard History still displays the full text within its existing HTML size limit. Focus and paste into the invoking app remain manual checks across the macOS application boundary.
