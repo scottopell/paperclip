@@ -30,19 +30,31 @@ struct LazyTextView: NSViewRepresentable {
     /// Bound AppKit layout, not clipboard data. Even non-contiguous layout must
     /// shape an entire paragraph before it can display the first visible lines.
     struct Preview {
+        static let maximumUTF16Length = 20_000
         let text: String
         let isTruncated: Bool
 
         init(_ text: String, maximumCharacters: Int?) {
-            guard let maximumCharacters,
-                  let end = text.index(text.startIndex, offsetBy: maximumCharacters,
-                                       limitedBy: text.endIndex), end != text.endIndex else {
+            guard let maximumCharacters else {
                 self.text = text
                 isTruncated = false
                 return
             }
+            // Character count alone does not bound shaping: one grapheme may
+            // contain arbitrarily many combining scalars. Omit a whole cluster
+            // if it would exceed TextKit's UTF-16 budget.
+            var end = text.startIndex
+            var remainingUTF16 = Self.maximumUTF16Length
+            for _ in 0..<maximumCharacters {
+                guard end != text.endIndex else { break }
+                let next = text.index(after: end)
+                let size = text[end..<next].utf16.count
+                guard size <= remainingUTF16 else { break }
+                remainingUTF16 -= size
+                end = next
+            }
             self.text = String(text[..<end])
-            isTruncated = true
+            isTruncated = end != text.endIndex
         }
     }
 
@@ -142,8 +154,6 @@ struct LazyTextView: NSViewRepresentable {
         textView.string = "Loading content..."
 
         let content = content
-        let maximumCharacters = maximumPreviewCharacters
-        let truncation = $isPreviewTruncated
         if content.usesLocalHTMLText {
             guard content.data.count <= LocalHTMLText.maximumImportBytes else {
                 textView.string = "HTML preview unavailable above 2 MB. Original clipboard data is unchanged."
@@ -151,16 +161,21 @@ struct LazyTextView: NSViewRepresentable {
             }
             RichSearchIndexer.shared.index(content, allowLarge: true) {
                 [weak textView, weak coordinator] text in
-                guard let coordinator, coordinator.loader.shouldApply(token) else { return }
-                let preview = Preview(text ?? "Unable to display text content.",
-                                      maximumCharacters: maximumCharacters)
-                textView?.string = preview.text
-                truncation.wrappedValue = preview.isTruncated
+                guard let textView, let coordinator,
+                      coordinator.loader.shouldApply(token) else { return }
+                loadPreview(in: textView, coordinator: coordinator, token: token) { text }
             }
             return
         }
+        loadPreview(in: textView, coordinator: coordinator, token: token) { content.textForDisplay() }
+    }
+
+    private func loadPreview(in textView: NSTextView, coordinator: Coordinator, token: UUID,
+                             decode: @escaping () -> String?) {
+        let maximumCharacters = maximumPreviewCharacters
+        let truncation = $isPreviewTruncated
         let loadingTask = DispatchWorkItem { [weak textView, weak coordinator] in
-            let preview = Preview(content.textForDisplay() ?? "Unable to display text content.",
+            let preview = Preview(decode() ?? "Unable to display text content.",
                                   maximumCharacters: maximumCharacters)
             guard let coordinator, coordinator.loader.shouldApply(token) else { return }
 

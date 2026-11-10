@@ -6,13 +6,14 @@ import SwiftUI
 @MainActor
 final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelegate {
     private let monitor: ClipboardMonitor
+    private let hostingController: NSHostingController<ContentView>
 
     init(monitor: ClipboardMonitor) {
         self.monitor = monitor
 
         let rootView = ContentView(clipboardMonitor: monitor)
-            .frame(minWidth: 600, minHeight: 400)
         let hostingController = NSHostingController(rootView: rootView)
+        self.hostingController = hostingController
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -41,7 +42,16 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hostingController.rootView.isHistoryActive = false
         sender.orderOut(nil)
         return false
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        hostingController.rootView.isHistoryActive = true
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        hostingController.rootView.isHistoryActive = false
     }
 }

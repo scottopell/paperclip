@@ -31,6 +31,75 @@ final class PerformanceTests: XCTestCase {
         XCTAssertFalse(unlimited.isTruncated)
     }
 
+    func testPreviewUTF16BudgetDropsOversizeClustersAndKeepsNormalClusters() {
+        let oversizeCluster = "a" + String(repeating: "\u{301}", count: 100_000)
+        for prefix in ["", "prefix "] {
+            let text = prefix + oversizeCluster
+            let preview = LazyTextView.Preview(text, maximumCharacters: 20_000)
+            XCTAssertEqual(preview.text, prefix)
+            XCTAssertTrue(preview.isTruncated)
+            XCTAssertEqual(LazyTextView.Preview(text, maximumCharacters: nil).text, text)
+        }
+        let family = "👨‍👩‍👧‍👦"
+        let preview = LazyTextView.Preview(String(repeating: family, count: 4_000),
+                                           maximumCharacters: 20_000)
+        XCTAssertEqual(preview.text, String(repeating: family,
+            count: LazyTextView.Preview.maximumUTF16Length / family.utf16.count))
+        XCTAssertLessThanOrEqual(preview.text.utf16.count, LazyTextView.Preview.maximumUTF16Length)
+        XCTAssertTrue(preview.isTruncated)
+    }
+
+    @MainActor
+    func testInactiveHistoryDetailDoesNotLoadSharedSelectionAndResumesFullText() async {
+        let board = NSPasteboard(name: .init("inactive-history-\(UUID())"))
+        defer { board.releaseGlobally() }
+        let monitor = ClipboardMonitor(loadPersistedHistory: false, pasteboard: board)
+        let fullText = String(repeating: "abcdefghij ", count: 100_000)
+        let items = ["first", fullText].map { text in
+            ClipboardHistoryItem(timestamp: .now, contents: [ClipboardContent(
+                data: Data(text.utf8), formats: [plainText], description: "history item")],
+                sourceApplication: nil)
+        }
+        monitor.history = items
+        monitor.selectHistoryItem(items[0])
+        let hosting = NSHostingView(rootView: ContentView(clipboardMonitor: monitor,
+                                                         isHistoryActive: true))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hosting
+        defer { window.contentView = nil }
+        hosting.layoutSubtreeIfNeeded()
+        let firstLoaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.descendantTextView(in: hosting)?.string == "first"
+        }, object: nil)
+        await fulfillment(of: [firstLoaded], timeout: 5)
+
+        // The window owner suspends detail when it loses key status. The
+        // retained history must not load selections made by Quick Search.
+        hosting.rootView.isHistoryActive = false
+        hosting.layoutSubtreeIfNeeded()
+        let unloaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.descendantTextView(in: hosting) == nil
+        }, object: nil)
+        await fulfillment(of: [unloaded], timeout: 5)
+        monitor.selectHistoryItem(items[1])
+        hosting.layoutSubtreeIfNeeded()
+        XCTAssertNil(descendantTextView(in: hosting))
+
+        hosting.rootView.isHistoryActive = true
+        hosting.layoutSubtreeIfNeeded()
+        let fullTextLoaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.descendantTextView(in: hosting)?.string == fullText
+        }, object: nil)
+        await fulfillment(of: [fullTextLoaded], timeout: 5)
+    }
+
+    @MainActor
+    private func descendantTextView(in view: NSView) -> NSTextView? {
+        if let text = view as? NSTextView { return text }
+        return view.subviews.lazy.compactMap { self.descendantTextView(in: $0) }.first
+    }
+
     @MainActor
     func testLargeHTMLAndPlainQuickSearchPreviewsKeepLayoutBoundedAndRestoreCompleteText() async {
         // A single paragraph forces TextKit to shape far beyond the visible lines.
