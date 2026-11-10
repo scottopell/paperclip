@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
+    @ObservedObject private var quickSearchManager = QuickSearchManager.shared
+    var isHistoryActive = false
 
     var body: some View {
         NavigationSplitView {
@@ -22,10 +24,16 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            ClipboardDetailView(
-                monitor: clipboardMonitor,
-            )
+            // The history window is retained when closed and shares Quick
+            // Search's selection. Only an actively inspected history window may
+            // decode and lay out its unbounded detail.
+            if isHistoryActive && !quickSearchManager.isQuickSearchVisible {
+                ClipboardDetailView(monitor: clipboardMonitor)
+            } else {
+                Color.clear
+            }
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
+        .frame(minWidth: 600, minHeight: 400)
     }
 }

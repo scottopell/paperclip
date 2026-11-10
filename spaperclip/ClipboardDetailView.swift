@@ -9,11 +9,13 @@ import SwiftUI
 
 struct ClipboardDetailView: View {
     @ObservedObject var monitor: ClipboardMonitor
+    var maximumPreviewCharacters: Int? = nil
 
     // A clipboard item may contain distinct data representations, such as TIFF and PNG.
     @State private var selectedContent: ClipboardContent?
     @State private var copyFeedback: CopyFeedback?
     @State private var sourceIcon: (bundleIdentifier: String, image: NSImage)?
+    @State private var isTextPreviewTruncated = false
 
     private enum CopyFeedback {
         case copied
@@ -145,6 +147,9 @@ struct ClipboardDetailView: View {
                 updateSelectionForItem(monitor.selectedHistoryItem)
                 copyFeedback = nil
             }
+            .onChange(of: selectedContent?.id) { _, _ in
+                isTextPreviewTruncated = false
+            }
             .task(id: item.sourceApplication?.bundleIdentifier) {
                 sourceIcon = nil
                 guard let bundleID = item.sourceApplication?.bundleIdentifier else { return }
@@ -219,9 +224,17 @@ struct ClipboardDetailView: View {
             // Preview section
             Group {
                 if content.canRenderAsText {
+                    if isTextPreviewTruncated {
+                        Text("Partial preview. Open Clipboard History to inspect the full text.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(8)
+                    }
                     // Use LazyTextView for text content instead of Text
                     // This handles massive text content much more efficiently
-                    LazyTextView(content: content, isEditable: false)
+                    LazyTextView(content: content, isEditable: false,
+                                 maximumPreviewCharacters: maximumPreviewCharacters,
+                                 isPreviewTruncated: $isTextPreviewTruncated)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if content.canRenderAsImage {
                     PDFImageView(data: content.data, contentID: content.id)
