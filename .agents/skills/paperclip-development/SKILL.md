@@ -29,14 +29,16 @@ xcodebuild \
 
 This builds and runs the unit suite without Apple signing credentials. For build-only, omit `-only-testing:spaperclipTests` and replace `test` with `build`.
 
-Quit the installed Paperclip before running a development copy so monitors and global shortcuts do not compete. Use a separate history store:
+Record whether production Paperclip is running. Before quitting it to run a development copy, notify the user that production clipboard capture will be paused. Quit it so monitors and global shortcuts do not compete, and use a separate history store:
 
 ```sh
 SPAPERCLIP_UI_TEST_ID="dev-$(uuidgen)" \
   .build/DerivedData/Build/Products/Debug/Paperclip.app/Contents/MacOS/Paperclip
 ```
 
-Paperclip launches quietly in the menu bar; open Clipboard History there or invoke Quick Search with the configured shortcut (default Control+Option+Space). Quit the development copy and relaunch `/Applications/Paperclip.app` afterward. Never replace the installed app with an ad-hoc build; deployment uses the signed release process in README and requires a deployment request.
+Paperclip launches quietly in the menu bar; open Clipboard History there or invoke Quick Search with the configured shortcut (default Control+Option+Space).
+
+After testing, including failed or interrupted runs, quit the development copy. If you quit a running production copy, relaunch `/Applications/Paperclip.app` and verify it is running, unless the user asked otherwise. Always tell the user whether production was restarted. If restart fails or remains unverified, clearly report that production capture may still be paused and give the installed app path so the user can restart it. Never replace the installed app with an ad-hoc build; deployment uses the signed release process in README and requires a deployment request.
 
 Use isolated named pasteboards for clipboard tests. Run focused checks while iterating and the relevant unit suite before submission. For window, focus, shortcut, or automatic-paste changes, perform the manual acceptance checks in README; XCUITest cannot reliably operate the accessory app's status menu or deliver its global hotkey. Documentation-only changes need skill/document validation, not an app rebuild.
 
